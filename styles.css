@@ -276,6 +276,10 @@ body {
 .drone-reobserving { color: var(--reobserving); }
 .drone-returning { color: var(--returning); }
 .drone-idle { color: var(--idle); }
+.drone-bidding { color: #d6dce1; }
+.drone-solo { color: #73cbd1; }
+.drone-quarantined { color: #c58cff; }
+.drone-dead { color: #69737b; }
 .drone-lost { color: var(--lost); }
 
 .small-item {

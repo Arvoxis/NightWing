@@ -59,14 +59,19 @@ function normalizeState(raw) {
   if (!raw || typeof raw !== 'object') {
     return {
       agents: [],
-      map: { width: 100, height: 100, grid_width: 32, grid_height: 32, buildings: [], obstacles: [], terrain: [] },
+      map: { width: 100, height: 100, grid_width: 32, grid_height: 32, buildings: [], obstacles: [], terrain: [], known: [], prob: [] },
       open_tasks: [],
       detections: [],
       confirmed_survivors: [],
+      survivors: [],
       trust_scores: {},
+      coverage: null,
+      mission_complete: false,
     };
   }
 
+  const map = raw.map || {};
+  const trustScores = raw.trust_scores && typeof raw.trust_scores === 'object' ? raw.trust_scores : {};
   const agents = Array.isArray(raw.agents) ? raw.agents.map((agent) => ({
     id: Number(agent?.id ?? 0),
     x: Number(agent?.x ?? 0),
@@ -74,13 +79,19 @@ function normalizeState(raw) {
     state: String(agent?.state ?? 'UNKNOWN'),
     battery: Number(agent?.battery ?? 0),
     heading: isFiniteNumber(agent?.heading) ? Number(agent.heading) : 0,
+    trust: isFiniteNumber(agent?.trust) ? Number(agent.trust) : Number(trustScores[String(agent?.id)] ?? 1),
+    quarantined: Boolean(agent?.quarantined),
+    connected: agent?.connected !== false,
   })) : [];
 
-  const map = raw.map || {};
   const openTasks = Array.isArray(raw.open_tasks) ? raw.open_tasks : [];
   const detections = Array.isArray(raw.detections) ? raw.detections : [];
   const confirmedSurvivors = Array.isArray(raw.confirmed_survivors) ? raw.confirmed_survivors : [];
-  const trustScores = raw.trust_scores && typeof raw.trust_scores === 'object' ? raw.trust_scores : {};
+  const survivors = Array.isArray(raw.survivors) ? raw.survivors : confirmedSurvivors.map((survivor, index) => ({
+    ...survivor,
+    id: survivor.id ?? index,
+    status: survivor.status || 'confirmed',
+  }));
 
   return {
     agents,
@@ -92,11 +103,16 @@ function normalizeState(raw) {
       buildings: Array.isArray(map.buildings) ? map.buildings : [],
       obstacles: Array.isArray(map.obstacles) ? map.obstacles : [],
       terrain: Array.isArray(map.terrain) ? map.terrain : [],
+      known: Array.isArray(map.known) ? map.known : [],
+      prob: Array.isArray(map.prob) ? map.prob : [],
     },
     open_tasks: openTasks,
     detections,
     confirmed_survivors: confirmedSurvivors,
+    survivors,
     trust_scores: trustScores,
+    coverage: isFiniteNumber(raw.coverage) ? Number(raw.coverage) : null,
+    mission_complete: Boolean(raw.mission_complete),
   };
 }
 
@@ -115,7 +131,9 @@ function updateStatusPanels() {
   elements.confirmedSurvivors.textContent = String(currentState.confirmed_survivors.length || 0);
   elements.openTasks.textContent = String(currentState.open_tasks.length || 0);
 
-  const coverage = computeSearchCoverage(currentState);
+  const coverage = isFiniteNumber(currentState.coverage)
+    ? Math.round(currentState.coverage * 100)
+    : computeSearchCoverage(currentState);
   elements.searchCoverage.textContent = `${coverage}%`;
 
   if (state.lastMessageTime) {
@@ -123,7 +141,7 @@ function updateStatusPanels() {
   }
 
   elements.wsStatus.textContent = state.connectionStatus;
-  elements.healthStatus.textContent = state.latest ? 'OK' : 'N/A';
+  elements.healthStatus.textContent = currentState.mission_complete ? 'MISSION COMPLETE' : state.latest ? 'OK' : 'N/A';
 }
 
 function computeSearchCoverage(simState) {
@@ -148,6 +166,10 @@ function getAgentStateClass(stateValue) {
   if (normalized.includes('REOBS')) return 'drone-reobserving';
   if (normalized.includes('RETURN')) return 'drone-returning';
   if (normalized.includes('IDLE')) return 'drone-idle';
+  if (normalized.includes('BIDDING')) return 'drone-bidding';
+  if (normalized.includes('SOLO')) return 'drone-solo';
+  if (normalized.includes('QUARANTINED')) return 'drone-quarantined';
+  if (normalized.includes('DEAD')) return 'drone-dead';
   return 'drone-lost';
 }
 
@@ -173,7 +195,7 @@ function renderDroneList() {
               <span class="drone-state ${stateClass}">${agent.state || 'UNKNOWN'}</span>
               <span class="drone-battery">${Math.round(agent.battery ?? 0)}%</span>
             </div>
-            <div class="drone-battery">${Number(agent.x ?? 0).toFixed(1)}, ${Number(agent.y ?? 0).toFixed(1)}</div>
+            <div class="drone-battery">${Number(agent.x ?? 0).toFixed(1)}, ${Number(agent.y ?? 0).toFixed(1)} · trust ${Math.round(Number(agent.trust ?? 1) * 100)}% · ${agent.connected === false ? 'NO LINK' : 'LINK'}</div>
           </div>
           <div class="drone-battery">${Math.round((agent.battery ?? 0) / 100 * 100)}%</div>
         </div>
@@ -310,6 +332,25 @@ function drawBackground(simState) {
 
 function drawHeatmap(simState, settings) {
   const { scale, originX, originY, mapWidth, mapHeight } = settings;
+  const probabilities = simState.map.prob || [];
+  const gridWidth = Number(simState.map.grid_width || probabilities[0]?.length || 0);
+  const gridHeight = Number(simState.map.grid_height || probabilities.length || 0);
+
+  if (gridWidth && gridHeight && probabilities.length) {
+    const cellWidth = (mapWidth * scale) / gridWidth;
+    const cellHeight = (mapHeight * scale) / gridHeight;
+    for (let gy = 0; gy < gridHeight; gy += 1) {
+      const row = probabilities[gy] || [];
+      for (let gx = 0; gx < gridWidth; gx += 1) {
+        const probability = clamp(Number(row[gx] ?? 0), 0, 1);
+        if (probability <= 0) continue;
+        ctx.fillStyle = `rgba(239, 145, 68, ${0.04 + probability * 0.28})`;
+        ctx.fillRect(originX + gx * cellWidth, originY + gy * cellHeight, cellWidth + 0.5, cellHeight + 0.5);
+      }
+    }
+    return;
+  }
+
   const detections = simState.detections || [];
   if (!detections.length) return;
 
@@ -328,7 +369,25 @@ function drawHeatmap(simState, settings) {
 }
 
 function drawSearchCoverage(simState, settings) {
-  const { scale, originX, originY } = settings;
+  const { scale, originX, originY, mapWidth, mapHeight } = settings;
+  const known = simState.map.known || [];
+  const gridWidth = Number(simState.map.grid_width || known[0]?.length || 0);
+  const gridHeight = Number(simState.map.grid_height || known.length || 0);
+
+  if (gridWidth && gridHeight && known.length) {
+    const cellWidth = (mapWidth * scale) / gridWidth;
+    const cellHeight = (mapHeight * scale) / gridHeight;
+    for (let gy = 0; gy < gridHeight; gy += 1) {
+      const row = known[gy] || [];
+      for (let gx = 0; gx < gridWidth; gx += 1) {
+        if (Number(row[gx] ?? 0) <= 0.5) continue;
+        ctx.fillStyle = 'rgba(93, 174, 151, 0.14)';
+        ctx.fillRect(originX + gx * cellWidth, originY + gy * cellHeight, cellWidth + 0.5, cellHeight + 0.5);
+      }
+    }
+    return;
+  }
+
   const agents = simState.agents || [];
   const detections = simState.detections || [];
   const points = [...agents, ...detections.map((d) => ({ x: d.x, y: d.y, confidence: d.confidence }))];
@@ -364,13 +423,15 @@ function drawTasks(simState, settings) {
 
 function drawSurvivors(simState, settings) {
   const { scale, originX, originY } = settings;
-  const survivors = simState.confirmed_survivors || [];
+  const survivors = simState.survivors || simState.confirmed_survivors || [];
 
   for (const survivor of survivors) {
     const x = Number(survivor.x ?? 0) * scale + originX;
     const y = Number(survivor.y ?? 0) * scale + originY;
+    const confirmed = String(survivor.status || 'confirmed').toLowerCase() === 'confirmed';
+    const color = confirmed ? '#70d39a' : '#f0c76d';
 
-    ctx.strokeStyle = '#ff6d5f';
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(x, y, 8, 0, Math.PI * 2);
@@ -385,8 +446,16 @@ function drawSurvivors(simState, settings) {
 
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#ff6d5f';
+    ctx.fillStyle = color;
     ctx.fill();
+
+    if (!confirmed) {
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(x, y, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 }
 
@@ -444,6 +513,31 @@ function drawDrones(simState, settings) {
       ctx.stroke();
     }
 
+    if (agent.quarantined || String(agent.state).toUpperCase().includes('QUARANTINED')) {
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#c58cff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (String(agent.state).toUpperCase().includes('SOLO')) {
+      ctx.beginPath();
+      ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#73cbd1';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    } else if (String(agent.state).toUpperCase().includes('DEAD')) {
+      ctx.strokeStyle = '#d95d5d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-size, -size);
+      ctx.lineTo(size, size);
+      ctx.moveTo(size, -size);
+      ctx.lineTo(-size, size);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 }
@@ -454,6 +548,10 @@ function getDroneColor(stateValue) {
   if (normalized.includes('REOBS')) return '#7db7ff';
   if (normalized.includes('RETURN')) return '#f39b63';
   if (normalized.includes('IDLE')) return '#8d9aa5';
+  if (normalized.includes('BIDDING')) return '#d6dce1';
+  if (normalized.includes('SOLO')) return '#73cbd1';
+  if (normalized.includes('QUARANTINED')) return '#c58cff';
+  if (normalized.includes('DEAD')) return '#69737b';
   return '#d95d5d';
 }
 
@@ -485,6 +583,8 @@ function renderDetailPanel() {
       <div class="row"><span>State</span><strong>${drone.state || 'UNKNOWN'}</strong></div>
       <div class="row"><span>Position</span><strong>${Number(drone.x ?? 0).toFixed(1)}, ${Number(drone.y ?? 0).toFixed(1)}</strong></div>
       <div class="row"><span>Battery</span><strong>${Math.round(drone.battery ?? 0)}%</strong></div>
+      <div class="row"><span>Trust</span><strong>${Math.round(Number(drone.trust ?? 1) * 100)}%</strong></div>
+      <div class="row"><span>Connection</span><strong>${drone.connected === false ? 'NO LINK' : 'LINK'}</strong></div>
       <div class="row"><span>Heading</span><strong>${Number(drone.heading ?? 0).toFixed(0)}°</strong></div>
       <div class="row"><span>Task</span><strong>${findActiveTask(drone.id)}</strong></div>
       <div class="row"><span>Last update</span><strong>${formatTime(new Date(state.lastMessageTime || Date.now()))}</strong></div>
@@ -492,15 +592,16 @@ function renderDetailPanel() {
     return;
   }
 
-  const selectedSurvivor = state.latest.confirmed_survivors[state.selectedSurvivorId];
+  const selectedSurvivor = (state.latest.survivors || state.latest.confirmed_survivors || [])[state.selectedSurvivorId];
   if (selectedSurvivor) {
     elements.detailPanel.classList.remove('hidden');
     elements.detailPanel.classList.add('visible');
     elements.detailTitle.textContent = 'Survivor';
     elements.detailBody.innerHTML = `
-      <div class="row"><span>Status</span><strong>Confirmed</strong></div>
+      <div class="row"><span>Status</span><strong>${selectedSurvivor.status || 'confirmed'}</strong></div>
       <div class="row"><span>Position</span><strong>${Number(selectedSurvivor.x ?? 0).toFixed(1)}, ${Number(selectedSurvivor.y ?? 0).toFixed(1)}</strong></div>
-      <div class="row"><span>Type</span><strong>Pinned survivor</strong></div>
+      <div class="row"><span>Confidence</span><strong>${Math.round(Number(selectedSurvivor.confidence ?? 0) * 100)}%</strong></div>
+      <div class="row"><span>Views</span><strong>${Number(selectedSurvivor.n_views ?? 0)}</strong></div>
     `;
     return;
   }
@@ -626,7 +727,7 @@ function attachCanvasInteraction() {
       return;
     }
 
-    const survivors = state.latest.confirmed_survivors || [];
+    const survivors = state.latest.survivors || state.latest.confirmed_survivors || [];
     for (let i = 0; i < survivors.length; i += 1) {
       const survivor = survivors[i];
       const px = Number(survivor.x || 0) * scale + originX;
