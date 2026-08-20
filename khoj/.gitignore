@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PlatformIO / build
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+*.bin
+*.elf
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# generated deck renders (regenerate with make_diagrams.py + svg_to_png.ps1)
+docs/ppt/*.render.html
+
+# Office lock files (created while a doc is open)
+~$*
