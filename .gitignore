@@ -14,3 +14,16 @@ Thumbs.db
 
 # runtime artifacts
 *.log
+
+# ML training artifacts (datasets, weights, runs — never commit these)
+detector/datasets/
+detector/runs/
+runs/
+*.pt
+*.onnx
+*.engine
+
+# downloaded datasets
+SARD_YOLO*/
+HERIDAL*/
+*.zip
