@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NightWing Mission Console</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-name">NIGHTWING</div>
+          <div class="brand-subtitle">SEARCH &amp; RESCUE MISSION CONTROL</div>
+        </div>
+
+        <div class="status-strip">
+          <div class="status-pill status-live">
+            <span class="dot"></span>
+            <span>LIVE</span>
+          </div>
+          <div id="connectionStatus" class="status-pill status-connecting">
+            <span class="dot"></span>
+            <span>CONNECTING...</span>
+          </div>
+          <div class="header-metric">
+            <span class="label">SIM TIME</span>
+            <span id="simTime">00:00:00</span>
+          </div>
+          <div class="header-metric">
+            <span class="label">ACTIVE DRONES</span>
+            <span id="activeDrones">0/0</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="dashboard-layout">
+        <section class="map-panel panel">
+          <div class="panel-header compact">
+            <div>
+              <div class="eyebrow">OPERATIONS MAP</div>
+            </div>
+            <div class="map-meta">
+              <span id="mapBounds">100 x 100</span>
+              <span id="lastUpdate">--:--:--</span>
+            </div>
+          </div>
+
+          <canvas id="mapCanvas"></canvas>
+
+          <div class="map-legend">
+            <div><span class="legend-swatch drone-searching"></span>Searching</div>
+            <div><span class="legend-swatch drone-reobserving"></span>Reobserving</div>
+            <div><span class="legend-swatch drone-returning"></span>Returning</div>
+            <div><span class="legend-swatch survivor"></span>Survivor</div>
+          </div>
+        </section>
+
+        <aside class="side-stack">
+          <section class="panel">
+            <div class="panel-header">
+              <div class="eyebrow">SWARM STATUS</div>
+            </div>
+            <div id="droneList" class="drone-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div class="eyebrow">DETECTIONS</div>
+            </div>
+            <div id="detectionList" class="small-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div class="eyebrow">TASKS</div>
+            </div>
+            <div id="taskList" class="small-list"></div>
+          </section>
+        </aside>
+      </main>
+
+      <section class="bottom-grid">
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <div class="eyebrow">SEARCH COVERAGE</div>
+          </div>
+          <div class="stat-value" id="searchCoverage">0%</div>
+          <div class="stat-foot">Derived from agent paths and detections</div>
+        </div>
+
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <div class="eyebrow">CONFIRMED SURVIVORS</div>
+          </div>
+          <div class="stat-value" id="confirmedSurvivors">0</div>
+          <div class="stat-foot">Fixed survivor pins</div>
+        </div>
+
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <div class="eyebrow">OPEN TASKS</div>
+          </div>
+          <div class="stat-value" id="openTasks">0</div>
+          <div class="stat-foot">Current mission queue</div>
+        </div>
+
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <div class="eyebrow">SYSTEM STATUS</div>
+          </div>
+          <div class="status-block">
+            <div class="status-line"><span class="label">WS</span><span id="wsStatus">CONNECTING...</span></div>
+            <div class="status-line"><span class="label">MODE</span><span>SIMULATION</span></div>
+            <div class="status-line"><span class="label">HEALTH</span><span id="healthStatus">N/A</span></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="detailPanel" class="detail-panel hidden">
+      <div class="detail-header">
+        <div id="detailTitle">Drone</div>
+        <button id="closeDetail" aria-label="Close detail">×</button>
+      </div>
+      <div id="detailBody" class="detail-body"></div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
