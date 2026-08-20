@@ -32,8 +32,10 @@ CONFIRM_P = 0.80        # posterior >= this -> confirmed
 DISMISS_P = 0.15        # posterior <= this -> dismissed
 MERGE_RADIUS = 3.0      # detections within this distance are the same candidate
 CONF_CLAMP = (0.02, 0.98)
-BASE_RATE = 0.10        # prior P(survivor in a given candidate cell) — survivors are rare
-MISS_LLR = -1.7         # log-odds added when an agent looks and sees nothing
+BASE_RATE = 0.35        # calibration prior: two mid-confidence hits shouldn't confirm;
+                        # a genuine glimpse + a close re-observation should
+MISS_LLR = -2.5         # log-odds added when an agent looks and sees nothing (strong:
+                        # one clean miss dismisses a phantom)
 
 
 def _logit(p: float) -> float:
@@ -70,6 +72,7 @@ class Candidate:
     views: dict = field(default_factory=dict)
     misses: set = field(default_factory=set)   # agents that looked & saw nothing
     status: str = "candidate"                  # candidate | confirmed | dismissed
+    scored: bool = False                       # trust already credited/debited?
 
     def logodds(self) -> float:
         # Bayesian fusion of independent observations against the base rate:
@@ -121,9 +124,44 @@ class CandidateStore:
     explicit MAP_DELTA gossip is a later refinement — control is already
     decentralised via the auction, which is what makes this a swarm."""
 
+    # trust: an agent whose detections keep getting dismissed is a faulty sensor.
+    QUAR_TRUST = 0.35       # below this trust -> quarantine
+    QUAR_MIN_SAMPLES = 3    # need at least this many resolved claims first
+    TRUST_PRIOR_GOOD = 3.0  # Beta prior: start optimistic (~0.75)
+    TRUST_PRIOR_BAD = 1.0
+
     def __init__(self):
         self.cands: dict[int, Candidate] = {}
         self._next_id = 0
+        # per-agent resolved-claim tallies for the trust score
+        self.agent_good: dict[int, int] = {}   # views that ended up confirmed
+        self.agent_bad: dict[int, int] = {}    # views that ended up dismissed
+        self.quarantined: set[int] = set()
+
+    # -------------------------------------------------------------- trust
+
+    def trust(self, agent_id: int) -> float:
+        g = self.agent_good.get(agent_id, 0)
+        b = self.agent_bad.get(agent_id, 0)
+        return ((g + self.TRUST_PRIOR_GOOD) /
+                (g + b + self.TRUST_PRIOR_GOOD + self.TRUST_PRIOR_BAD))
+
+    def _score_agents(self, cand: Candidate):
+        """Credit/debit the agents that claimed a detection on this candidate, once
+        it resolves. Agents that MISSED (looked, saw nothing) are never penalised —
+        only false *claims* cost trust."""
+        good = cand.status == "confirmed"
+        for aid in cand.views:
+            tally = self.agent_good if good else self.agent_bad
+            tally[aid] = tally.get(aid, 0) + 1
+
+    def _refresh_quarantine(self):
+        for aid in set(self.agent_good) | set(self.agent_bad):
+            samples = self.agent_good.get(aid, 0) + self.agent_bad.get(aid, 0)
+            if samples >= self.QUAR_MIN_SAMPLES and self.trust(aid) < self.QUAR_TRUST:
+                self.quarantined.add(aid)
+            elif aid in self.quarantined and self.trust(aid) >= self.QUAR_TRUST:
+                self.quarantined.discard(aid)   # rehabilitated if it recovers
 
     # -------------------------------------------------------------- ingest
 
@@ -140,7 +178,10 @@ class CandidateStore:
     def ingest(self, det):
         """Fold one detection into the matching candidate (or create one). Keeps
         only each agent's *best* view, so repeated looks from one agent don't
-        stack into a false confirmation."""
+        stack into a false confirmation. Detections from a QUARANTINED agent are
+        dropped — a distrusted sensor can't poison the shared map."""
+        if det.agent_id in self.quarantined:
+            return None
         c = self._nearest(det.x, det.y)
         if c is None:
             c = Candidate(id=self._next_id, x=det.x, y=det.y)
@@ -180,6 +221,11 @@ class CandidateStore:
                 c.status = "dismissed"
             else:
                 c.status = "candidate"
+            # credit/debit trust once, when a candidate first resolves
+            if c.status in ("confirmed", "dismissed") and not c.scored:
+                self._score_agents(c)
+                c.scored = True
+        self._refresh_quarantine()
 
     # -------------------------------------------------------------- queries
 

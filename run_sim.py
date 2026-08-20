@@ -33,7 +33,7 @@ def build_state(world: World, swarm: Swarm) -> SimState:
         grid_h=world.cfg.grid_h,
         known=world.known,
         prob=swarm.store.prob_grid(world.cfg.grid_w, world.cfg.grid_h),
-        agents=[b.snapshot().as_dict() for b in swarm.brains.values()],
+        agents=swarm.snapshots(),
         tasks=[t.as_dict() for t in swarm.tasks.values()],
         bids=swarm.last_bids,
         survivors=swarm.store.survivors(),
@@ -46,6 +46,8 @@ def mission_complete(world: World, swarm: Swarm, coverage_target: float = 0.92) 
     confirmed or dismissed — you don't stop a rescue with sightings unchecked."""
     if world.coverage() < coverage_target:
         return False
+    if any(swarm.detection_buffer.values()):
+        return False                          # a solo agent still holds unmerged finds
     return swarm.store.counts()["candidate"] == 0
 
 
@@ -53,6 +55,8 @@ def tick_once(world: World, swarm: Swarm):
     """One simulation tick: sync brain<-world, (periodically) auction, drive,
     step the world, resolve arrivals."""
     swarm.sync_from_world(world)
+    swarm.update_connectivity(world.cfg.base_xy)
+    swarm.check_battery()
 
     if world.tick % AUCTION_EVERY == 0:
         swarm.rebuild_frontier_tasks(world.known, world.prob,
@@ -64,7 +68,7 @@ def tick_once(world: World, swarm: Swarm):
         world.command(aid, goal)
 
     detections = world.step()
-    swarm.store.ingest_many(detections)
+    swarm.route_detections(detections)      # solo agents' finds are buffered
     swarm.store.update_statuses()
     swarm.resolve_arrivals()
 

@@ -90,6 +90,8 @@ class World:
             ay = c.base_xy[1] + self.rng.uniform(-1, 1)
             self.agents[i] = AgentBody(id=i, x=ax, y=ay, battery=c.battery_full)
 
+        self.corrupted: set[int] = set()   # agents with a faulty sensor (phantom hits)
+
     # -------------------------------------------------------------- setup
 
     def _place_survivors(self) -> list[tuple]:
@@ -119,6 +121,15 @@ class World:
         if a:
             a.alive = False
             a.goal = None
+
+    def corrupt(self, agent_id: int, on: bool = True):
+        """Failure injection: an agent's sensor goes faulty and starts reporting
+        phantom detections (a cracked/fogged lens after flying through smoke).
+        Drives the trust/quarantine demo."""
+        if on:
+            self.corrupted.add(agent_id)
+        else:
+            self.corrupted.discard(agent_id)
 
     # -------------------------------------------------------------- step
 
@@ -155,7 +166,9 @@ class World:
 
     def _drain(self, a: AgentBody):
         c = self.cfg
-        if a.goal is not None:
+        if a.distance_to(*c.base_xy) < 2.0:
+            a.battery = min(c.battery_full, a.battery + 5.0 * c.dt)   # recharge at base
+        elif a.goal is not None:
             a.battery = max(0.0, a.battery - c.battery_drain * c.dt)
 
     def _sense(self, a: AgentBody) -> list[Detection]:
@@ -179,10 +192,12 @@ class World:
             dist = a.distance_to(sx, sy)
             if dist <= c.detect_range:
                 self.found_gt.add(idx)
-                # confidence for a single search pass: a glimpse from altitude/speed,
-                # capped so no one pass is conclusive — confirmation needs a second
-                # agent's view (the re-observation loop). Falls off with range.
-                conf = max(0.05, min(0.65, 1.0 - (dist / c.detect_range) ** 1.5))
+                # confidence falls off with range. Capped below the confirm
+                # threshold so no single pass is conclusive — confirmation always
+                # needs a second agent (the re-observation loop). A close look
+                # (re-observation) scores higher than a distant glimpse, which is
+                # what separates a real survivor from a mid-confidence false alarm.
+                conf = max(0.05, min(0.78, 1.0 - (dist / c.detect_range) ** 1.5))
                 out.append(Detection(
                     agent_id=a.id,
                     x=sx + self.rng.uniform(-0.3, 0.3),   # small localization noise
@@ -202,6 +217,20 @@ class World:
                     agent_id=a.id,
                     x=fx, y=fy,
                     confidence=self.rng.uniform(0.28, 0.5),
+                    bearing=bearing_between(a.x, a.y, fx, fy),
+                    t=self.t,
+                ))
+
+        # corrupted sensor: emits phantom detections frequently, at confident-looking
+        # scores, all over the place — these are false and the swarm must reject them.
+        if a.id in self.corrupted and self.rng.random() < 0.4:
+            fx = a.x + self.rng.uniform(-r, r)
+            fy = a.y + self.rng.uniform(-r, r)
+            if 0 <= fx < c.grid_w and 0 <= fy < c.grid_h:
+                out.append(Detection(
+                    agent_id=a.id,
+                    x=fx, y=fy,
+                    confidence=self.rng.uniform(0.45, 0.65),
                     bearing=bearing_between(a.x, a.y, fx, fy),
                     t=self.t,
                 ))

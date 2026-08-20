@@ -26,6 +26,7 @@ class AgentState(str, Enum):
     RETURNING = "returning"      # battery-low, heading to base
     SOLO = "solo"                # lost comms, operating on stale info
     DEAD = "dead"                # failed / killed
+    QUARANTINED = "quarantined"  # distrusted (faulty sensor); still flies, ignored
 
 
 class TaskType(str, Enum):
@@ -90,6 +91,8 @@ class AgentSnapshot:
     state: str                   # AgentState value
     goal: Optional[tuple] = None
     trust: float = 1.0
+    quarantined: bool = False
+    connected: bool = True
 
     def as_dict(self) -> dict:
         return asdict(self)

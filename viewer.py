@@ -33,8 +33,9 @@ STATE_COLOR = {
     "searching": "#2b8cff",
     "bidding": "#ffcc00",
     "reobserving": "#a855f7",
-    "returning": "#ff8800",
+    "returning": "#22d3ee",
     "solo": "#ff8800",
+    "quarantined": "#dc2626",
     "dead": "#000000",
 }
 
@@ -73,18 +74,30 @@ def draw(ax, w: World, s: Swarm):
             ax.scatter([cand.x], [cand.y], marker="x", s=60,
                        c="#64748b", linewidths=1.0, alpha=0.6, zorder=5)
 
-    # agents + their goal lines
+    # agents + their goal lines. display state reflects quarantine/solo/returning.
     for b in s.brains.values():
-        col = STATE_COLOR.get(b.state.value, "#888888")
         if not b.alive:
             ax.scatter([b.x], [b.y], marker="x", s=90, c="black", zorder=6)
+            ax.text(b.x + 0.4, b.y + 0.4, str(b.id), fontsize=8, color="#888", zorder=8)
             continue
+        if b.id in s.store.quarantined:
+            disp = "quarantined"
+        elif not b.connected:
+            disp = "solo"
+        elif b.returning:
+            disp = "returning"
+        else:
+            disp = b.state.value
+        col = STATE_COLOR.get(disp, "#888888")
         if b.current_task is not None:
             ax.plot([b.x, b.current_task.x], [b.y, b.current_task.y],
                     color=col, linewidth=0.8, alpha=0.5, zorder=3)
         ax.scatter([b.x], [b.y], marker="o", s=70, c=col,
                    edgecolors="white", linewidths=1.0, zorder=7)
         ax.text(b.x + 0.4, b.y + 0.4, str(b.id), fontsize=8, color="white", zorder=8)
+        # trust readout under each agent
+        ax.text(b.x + 0.4, b.y - 1.1, f"t{s.store.trust(b.id):.2f}",
+                fontsize=6, color=col, zorder=8)
 
     alive = len(w.alive_agents())
     counts = s.store.counts()
