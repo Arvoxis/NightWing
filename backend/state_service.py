@@ -3,12 +3,24 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Dict
 
-from dashboard.simulator.fake_state import FakeStateGenerator
+from backend.config import ENGINE_MODE, ENGINE_SEED
+
+
+def _make_generator(seed: int | None):
+    """Pick the state source. 'real' drives the dashboard from the actual swarm
+    engine (the bridge); 'fake' keeps B1's mock for standalone frontend work.
+    Imports are lazy so the fake path never pulls in the engine and vice-versa."""
+    if ENGINE_MODE == "fake":
+        from dashboard.simulator.fake_state import FakeStateGenerator
+        return FakeStateGenerator(seed=seed)
+    from dashboard.simulator.real_state import RealStateGenerator
+    return RealStateGenerator(seed=seed)
 
 
 class StateService:
     def __init__(self, seed: int | None = None) -> None:
-        self.generator = FakeStateGenerator(seed=seed)
+        seed = ENGINE_SEED if seed is None else seed
+        self.generator = _make_generator(seed)
         self.latest_state: Dict[str, Any] = self.generator.generate_state()
         self._loop_task: asyncio.Task | None = None
         self._running = False

@@ -71,6 +71,7 @@ def tick_once(world: World, swarm: Swarm):
     swarm.route_detections(detections)      # solo agents' finds are buffered
     swarm.store.update_statuses()
     swarm.resolve_arrivals()
+    return detections                        # let callers (dashboard adapter) surface them
 
 
 def run(ticks: int = 1500, quiet: bool = False, seed: int | None = 0):
