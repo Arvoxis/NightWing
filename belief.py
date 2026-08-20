@@ -29,6 +29,11 @@ from protocol import Survivor, bearing_between
 # ------------------------------------------------------------------ tunables
 
 CONFIRM_P = 0.80        # posterior >= this -> confirmed
+MIN_CONFIRM_AGENTS = 2  # ...AND at least this many *distinct* agents must have
+                        # seen it. Corroboration is structural, not a side-effect
+                        # of the sim's confidence cap: a single high-confidence
+                        # real-YOLO hit (0.8+) must NOT self-confirm. Independent
+                        # agreement is the thesis — enforce it by construction.
 DISMISS_P = 0.15        # posterior <= this -> dismissed
 MERGE_RADIUS = 3.0      # detections within this distance are the same candidate
 CONF_CLAMP = (0.02, 0.98)
@@ -212,7 +217,7 @@ class CandidateStore:
             if c.status == "dismissed":
                 continue                     # dismissal is sticky (hive-mind memory)
             p = c.prob()
-            if p >= CONFIRM_P:
+            if p >= CONFIRM_P and len(c.views) >= MIN_CONFIRM_AGENTS:
                 c.status = "confirmed"
             elif p <= DISMISS_P and (len(c.misses) >= 1 or len(c.views) >= 2):
                 # only dismiss with actual evidence of absence — never kill a real
