@@ -134,6 +134,24 @@ body {
   text-transform: uppercase;
 }
 
+.restart-button {
+  align-self: stretch;
+  padding: 6px 10px;
+  border: 1px solid rgba(247, 185, 85, 0.32);
+  border-radius: 4px;
+  background: rgba(247, 185, 85, 0.08);
+  color: var(--warning);
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.restart-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .dashboard-layout {
   display: grid;
   grid-template-columns: minmax(0, 3.2fr) minmax(290px, 1fr);

@@ -49,6 +49,11 @@ async def get_latest_state() -> dict[str, Any]:
     return state_service.get_state()
 
 
+@app.post("/restart")
+async def restart_search() -> dict[str, Any]:
+    return await state_service.reset()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await manager.connect(websocket)

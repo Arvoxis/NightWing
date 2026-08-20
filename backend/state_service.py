@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from typing import Any, Callable, Dict
 
 from backend.config import ENGINE_MODE, ENGINE_SEED
@@ -25,6 +26,7 @@ class StateService:
         self._loop_task: asyncio.Task | None = None
         self._running = False
         self._broadcast_callback: Callable[[Dict[str, Any]], Any] | None = None
+        self._reset_lock = asyncio.Lock()
 
     def set_broadcast_callback(self, callback: Callable[[Dict[str, Any]], Any]) -> None:
         self._broadcast_callback = callback
@@ -54,3 +56,14 @@ class StateService:
 
     def get_state(self) -> Dict[str, Any]:
         return self.latest_state
+
+    async def reset(self) -> Dict[str, Any]:
+        async with self._reset_lock:
+            seed = secrets.randbelow(2**32)
+            reset = getattr(self.generator, "reset", None)
+            if reset is not None:
+                reset(seed)
+            else:
+                self.generator = _make_generator(seed)
+            self.latest_state = self.generator.generate_state()
+            return self.latest_state

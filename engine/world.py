@@ -19,7 +19,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from protocol import Detection, bearing_between
+from engine.protocol import Detection, bearing_between
 
 
 # ------------------------------------------------------------------ config

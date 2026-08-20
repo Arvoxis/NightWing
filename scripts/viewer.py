@@ -6,9 +6,9 @@ This is a throwaway sanity tool so the team can *see* the engine working before
 the real web dashboard exists. Run it in the `ml` env (has matplotlib):
 
     conda activate ml
-    python viewer.py                 # seed 0
-    python viewer.py --seed 1        # the seed that used to deadlock
-    python viewer.py --save run.png  # render one frame headless (no window)
+    python -m scripts.viewer                 # seed 0
+    python -m scripts.viewer --seed 1        # the seed that used to deadlock
+    python -m scripts.viewer --save run.png  # render one frame headless (no window)
 
 Colors:
     agents  blue=searching  yellow=bidding  purple=reobserving
@@ -24,9 +24,9 @@ import argparse
 import matplotlib
 import numpy as np
 
-from world import World, WorldConfig
-from swarm import Swarm, BrainConfig
-from run_sim import tick_once, mission_complete
+from engine.world import World, WorldConfig
+from engine.swarm import Swarm, BrainConfig
+from engine.run_sim import tick_once, mission_complete
 
 
 STATE_COLOR = {
