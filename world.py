@@ -38,6 +38,10 @@ class WorldConfig:
     base_xy: tuple = (2.0, 2.0)       # return-to-base point
     # detection model (stand-in until real YOLO): confidence falls off with range
     detect_range: float = 4.0
+    # false positives: chance per moving agent per tick of a spurious detection
+    # (debris mistaken for a person) — gives the re-observation loop something to
+    # reject. Real YOLO supplies these naturally at v3.
+    fp_rate: float = 0.002
     seed: int | None = None
 
 
@@ -175,8 +179,10 @@ class World:
             dist = a.distance_to(sx, sy)
             if dist <= c.detect_range:
                 self.found_gt.add(idx)
-                # confidence: high when close/centered, low near the edge of range
-                conf = max(0.05, min(0.95, 1.0 - (dist / c.detect_range) ** 1.5))
+                # confidence for a single search pass: a glimpse from altitude/speed,
+                # capped so no one pass is conclusive — confirmation needs a second
+                # agent's view (the re-observation loop). Falls off with range.
+                conf = max(0.05, min(0.65, 1.0 - (dist / c.detect_range) ** 1.5))
                 out.append(Detection(
                     agent_id=a.id,
                     x=sx + self.rng.uniform(-0.3, 0.3),   # small localization noise
@@ -185,7 +191,30 @@ class World:
                     bearing=bearing_between(a.x, a.y, sx, sy),
                     t=self.t,
                 ))
+
+        # spurious detection (false positive): a moving agent occasionally mistakes
+        # debris for a person, at a low-ish confidence, somewhere in its footprint.
+        if a.goal is not None and self.rng.random() < c.fp_rate:
+            fx = a.x + self.rng.uniform(-r, r)
+            fy = a.y + self.rng.uniform(-r, r)
+            if 0 <= fx < c.grid_w and 0 <= fy < c.grid_h:
+                out.append(Detection(
+                    agent_id=a.id,
+                    x=fx, y=fy,
+                    confidence=self.rng.uniform(0.28, 0.5),
+                    bearing=bearing_between(a.x, a.y, fx, fy),
+                    t=self.t,
+                ))
         return out
+
+    def survivor_within(self, x: float, y: float, radius: float) -> bool:
+        """Ground-truth check: is there a real survivor within `radius` of (x,y)?
+        Used only to decide whether a re-observing agent legitimately sees
+        something (a real survivor) or should register a miss (a false alarm)."""
+        for (sx, sy) in self.survivors_gt:
+            if math.hypot(sx - x, sy - y) <= radius:
+                return True
+        return False
 
     # -------------------------------------------------------------- queries
 

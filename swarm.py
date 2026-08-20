@@ -23,7 +23,9 @@ from dataclasses import dataclass
 
 from protocol import (
     Task, TaskType, Bid, AgentSnapshot, AgentState,
+    bearing_between, angular_diff,
 )
+from belief import CandidateStore, binary_entropy
 
 
 # ------------------------------------------------------------------ config
@@ -37,6 +39,8 @@ class BrainConfig:
     speed: float = 4.0            # must match world agent_speed for cost=time
     t_obs: float = 1.0            # time to service a task
     arrive_dist: float = 0.6      # within this of goal counts as "arrived"
+    c_fn: float = 100.0           # cost of a false negative (missing a survivor)
+    theta0: float = 1.047         # viewpoint-diversity scale (~60 deg, radians)
 
 
 # ------------------------------------------------------------------ per-agent brain
@@ -61,14 +65,26 @@ class AgentBrain:
     # -------------------------------------------------------------- bidding
 
     def value_of(self, task: Task) -> float:
-        """Expected survivors for servicing this task. v0: frontier only."""
+        """Expected survivors for servicing this task, in the same currency for
+        both task types so they compete in one auction."""
         c = self.cfg
         if task.type == TaskType.FRONTIER:
             # cheap frontier utility: prior mass * recall (area folded into the
             # coarse frontier sampling). prior defaults small but > 0.
             return max(0.05, task.prior) * c.p_det
-        # REOBSERVE handled in v1; keep a floor so it never crashes if present.
-        return max(0.05, task.prior)
+
+        # REOBSERVE: expected value of information on an uncertain candidate.
+        #   U = H(p) * C_FN * viewpoint_diversity
+        # H(p)         -> most valuable when the candidate is genuinely uncertain
+        # C_FN         -> a missed survivor is far costlier than a false alarm
+        # viewpoint    -> a look from a *different* bearing than the original is
+        #                 what actually resolves occlusion; a redundant angle isn't
+        p = min(0.98, max(0.02, task.prior))
+        H = binary_entropy(p)
+        approach = bearing_between(self.x, self.y, task.x, task.y)
+        dtheta = angular_diff(approach, task.bearing)
+        viewpoint = 1.0 - math.exp(-dtheta / c.theta0)
+        return H * c.c_fn * viewpoint
 
     def cost_of(self, task: Task) -> float:
         """Cost in TIME (seconds) to reach and service the task."""
@@ -119,6 +135,7 @@ class Swarm:
         self.brains = {i: AgentBrain(i, self.cfg) for i in agent_ids}
         self.tasks: dict[str, Task] = {}
         self.last_bids: list[dict] = []   # for the dashboard task board
+        self.store = CandidateStore()     # shared belief / fusion (laptop-side)
 
     # -------------------------------------------------------------- frontier tasks
 
@@ -166,6 +183,28 @@ class Swarm:
             return base + prob[gy][gx]
         return base
 
+    def rebuild_reobserve_tasks(self):
+        """Turn each uncertain candidate into a REOBSERVE task, unless an agent is
+        already committed to re-checking it. These compete in the same auction as
+        frontier tasks — and outbid them, because confirming a likely survivor is
+        worth far more than exploring blank space."""
+        busy = {b.current_task.cand_id for b in self.brains.values()
+                if b.alive and b.current_task is not None
+                and b.current_task.type == TaskType.REOBSERVE
+                and b.current_task.cand_id is not None}
+        # drop all open reobserve tasks; committed ones live on the brains, not here
+        self.tasks = {tid: t for tid, t in self.tasks.items()
+                      if t.type != TaskType.REOBSERVE}
+        for c in self.store.reobserve_candidates():
+            if c.id in busy:
+                continue
+            tid = f"R_{c.id}"
+            self.tasks[tid] = Task(
+                task_id=tid, type=TaskType.REOBSERVE,
+                x=c.x, y=c.y, prior=c.prob(),
+                bearing=c.primary_bearing(), cand_id=c.id,
+            )
+
     # -------------------------------------------------------------- auction
 
     def run_auction(self, t_now: float):
@@ -197,7 +236,8 @@ class Swarm:
             task.owner = winner_id
             wb = self.brains[winner_id]
             wb.current_task = task
-            wb.state = AgentState.SEARCHING
+            wb.state = (AgentState.REOBSERVING if task.type == TaskType.REOBSERVE
+                        else AgentState.SEARCHING)
             free = [b for b in free if b.id != winner_id]
 
     # -------------------------------------------------------------- tick
@@ -226,10 +266,15 @@ class Swarm:
             if not b.alive:
                 continue
             if b.current_task is not None and b.arrived():
-                # frontier serviced; the world will have marked it known
-                b.current_task.open = False
-                b.current_task.owner = None
-                self.tasks.pop(b.current_task.task_id, None)
+                t = b.current_task
+                if t.type == TaskType.REOBSERVE and t.cand_id is not None:
+                    # if the agent actually saw the candidate on approach, its view
+                    # is already fused; if not, this records a miss (evidence
+                    # against) — no-op when a view exists.
+                    self.store.register_miss(t.cand_id, b.id)
+                t.open = False
+                t.owner = None
+                self.tasks.pop(t.task_id, None)
                 b.current_task = None
                 b.state = AgentState.BIDDING
 

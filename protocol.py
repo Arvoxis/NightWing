@@ -63,6 +63,7 @@ class Task:
     bearing: float = 0.0         # for REOBSERVE: bearing of the *original* sighting
     open: bool = True
     owner: Optional[int] = None  # agent id that won it, if any
+    cand_id: Optional[int] = None  # for REOBSERVE: which candidate this re-checks
 
     def as_dict(self) -> dict:
         d = asdict(self)
