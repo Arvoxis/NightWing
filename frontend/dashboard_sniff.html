@@ -882,17 +882,17 @@ class Sim {
     this.detFlashes = this.detFlashes.filter(f => f.age < 1);
     for (const f of this.detFlashes) f.age += dt * 2;
 
-    // check mission
-    const nVictims  = this.victims.filter(v=>v.kind==='victim').length;
-    const nDecoys   = this.victims.filter(v=>v.kind==='decoy').length;
-    const nConf     = this.confirmed.filter(c=>c.kind==='victim').length;
-    const nDism     = this.confirmed.filter(c=>c.kind==='decoy').length;
-    if (nVictims > 0 && nConf >= nVictims && nDism >= nDecoys) {
-      if (!this.missionDone) {
-        this.missionDone = true;
-        this._log('MISSION COMPLETE — all survivors found', 'confirm');
-        document.getElementById('missionBanner').classList.add('show');
-      }
+    // Mission complete = 100% area coverage achieved.
+    // We don't know the survivor count upfront — the grid reports what it found.
+    const pct = parseInt(this.coveragePct());
+    if (pct >= 100 && !this.missionDone) {
+      this.missionDone = true;
+      const nFound = this.confirmed.filter(c=>c.kind==='victim').length;
+      this._log(`SEARCH COMPLETE — ${nFound} survivor(s) located across full grid`, 'confirm');
+      const banner = document.getElementById('missionBanner');
+      banner.querySelector('.mission-complete-text').textContent = `${nFound} SURVIVOR${nFound!==1?'S':''} LOCATED`;
+      banner.querySelector('.mission-complete-sub').textContent  = 'FULL GRID COVERAGE · SWARM RETURNING TO BASE';
+      banner.classList.add('show');
     }
   }
 

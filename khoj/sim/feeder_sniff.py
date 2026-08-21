@@ -615,6 +615,10 @@ def main():
     ap.add_argument("--beacon",    type=int,   default=-1)
     ap.add_argument("--dashboard", default="http://127.0.0.1:8000/ingest")
     ap.add_argument("--no-dashboard", action="store_true")
+    ap.add_argument("--reset",    dest="reset", action="store_true",  default=True,
+                    help="Pulse DTR on every port to soft-reset ESP32 boards at startup (default ON)")
+    ap.add_argument("--no-reset", dest="reset", action="store_false",
+                    help="Skip the DTR reset pulse (use if boards are already running)")
     a = ap.parse_args()
 
     rng  = random.Random(a.seed)
@@ -679,6 +683,21 @@ def main():
             print("  !! could not open %s: %s" % (p, e))
     if not bodies:
         sys.exit("No port could be opened.")
+
+    # Optional DTR soft-reset: pulses the EN pin via the CP2102/CH340 control
+    # line — equivalent to pressing the RESET button, no power cycle needed.
+    if a.reset:
+        print("   Resetting boards via DTR …", end="", flush=True)
+        for b in bodies:
+            try:
+                b.ser.dtr = True    # EN low  → board enters reset
+                time.sleep(0.12)
+                b.ser.dtr = False   # EN high → board boots normally
+            except Exception:
+                pass
+        time.sleep(1.8)             # wait for firmware to boot and init mesh
+        print(" done")
+        _ev("Boards soft-reset via DTR — mesh initialising")
 
     # all drones launch from the base in a small circle
     for i, b in enumerate(bodies):
