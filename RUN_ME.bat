@@ -17,13 +17,18 @@ set SPEED=2
 cd /d "%~dp0"
 
 echo  [1/5] Clearing old processes on ports 8000 and 3000 ...
-for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8000 "') do (
+REM Filter to LISTENING only -- otherwise findstr matches hundreds of
+REM TIME_WAIT sockets with PID=0 and taskkill runs slowly on each one.
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr "LISTENING" ^| findstr ":8000"') do (
     taskkill /PID %%a /F >nul 2>&1
 )
-for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":3000 "') do (
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr "LISTENING" ^| findstr ":3000"') do (
     taskkill /PID %%a /F >nul 2>&1
 )
-ping -n 2 127.0.0.1 >nul
+REM Also kill any stray feeder_sniff.py process (previous run may have left one)
+for /f "tokens=2" %%p in ('tasklist /fi "imagename eq py.exe" /nh 2^>nul ^| findstr /i "py.exe"') do (
+    taskkill /PID %%p /F >nul 2>&1
+)
 
 echo  [2/5] Starting backend on :8000 ...
 start "KHOJ-Backend" /min cmd /c "cd /d "%~dp0" && set KHOJ_ENGINE=hardware && py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000"
