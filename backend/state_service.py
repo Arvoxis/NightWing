@@ -9,11 +9,15 @@ from backend.config import ENGINE_MODE, ENGINE_SEED
 
 def _make_generator(seed: int | None):
     """Pick the state source. 'real' drives the dashboard from the actual swarm
-    engine (the bridge); 'fake' keeps B1's mock for standalone frontend work.
-    Imports are lazy so the fake path never pulls in the engine and vice-versa."""
+    engine; 'hardware' from the 5 live ESP32 boards (fed over /ingest by
+    khoj/sim/feeder_real.py); 'fake' keeps B1's mock for standalone frontend
+    work. Imports are lazy so no path pulls in another's dependencies."""
     if ENGINE_MODE == "fake":
         from dashboard.simulator.fake_state import FakeStateGenerator
         return FakeStateGenerator(seed=seed)
+    if ENGINE_MODE == "hardware":
+        from dashboard.simulator.hardware_state import HardwareStateGenerator
+        return HardwareStateGenerator(seed=seed)
     from dashboard.simulator.real_state import RealStateGenerator
     return RealStateGenerator(seed=seed)
 
@@ -56,6 +60,20 @@ class StateService:
 
     def get_state(self) -> Dict[str, Any]:
         return self.latest_state
+
+    def ingest(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Push a snapshot in from an external producer (the hardware bridge).
+
+        Only meaningful for a generator that accepts outside state - the
+        hardware one. In 'real'/'fake' mode there is nothing to ingest into, so
+        this reports that rather than silently accepting and discarding, which
+        would look like a working pipeline that renders nothing."""
+        handler = getattr(self.generator, "ingest", None)
+        if handler is None:
+            return {"ok": False,
+                    "error": "engine mode %r does not accept ingest; start the "
+                             "backend with KHOJ_ENGINE=hardware" % ENGINE_MODE}
+        return handler(snapshot)
 
     async def reset(self) -> Dict[str, Any]:
         async with self._reset_lock:

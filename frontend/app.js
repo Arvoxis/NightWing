@@ -28,6 +28,7 @@ const elements = {
   openTasks: document.getElementById('openTasks'),
   wsStatus: document.getElementById('wsStatus'),
   healthStatus: document.getElementById('healthStatus'),
+  engineMode: document.getElementById('engineMode'),
   restartSearch: document.getElementById('restartSearch'),
   detailPanel: document.getElementById('detailPanel'),
   detailTitle: document.getElementById('detailTitle'),
@@ -68,6 +69,7 @@ function normalizeState(raw) {
       trust_scores: {},
       coverage: null,
       mission_complete: false,
+      bridge: null,
     };
   }
 
@@ -114,6 +116,7 @@ function normalizeState(raw) {
     trust_scores: trustScores,
     coverage: isFiniteNumber(raw.coverage) ? Number(raw.coverage) : null,
     mission_complete: Boolean(raw.mission_complete),
+    bridge: raw.bridge && typeof raw.bridge === 'object' ? raw.bridge : null,
   };
 }
 
@@ -143,6 +146,20 @@ function updateStatusPanels() {
 
   elements.wsStatus.textContent = state.connectionStatus;
   elements.healthStatus.textContent = currentState.mission_complete ? 'MISSION COMPLETE' : state.latest ? 'OK' : 'N/A';
+
+  // MODE reflects the real backend engine, not a hardcoded label. The hardware
+  // bridge tags its payload with `bridge.source`; a bridge that has gone stale
+  // (ESPs unplugged / feeder stopped) reads OFFLINE instead of pretending.
+  if (elements.engineMode) {
+    const bridge = currentState.bridge;
+    if (bridge && typeof bridge === 'object') {
+      elements.engineMode.textContent = bridge.online === false
+        ? 'HARDWARE (no bridge)'
+        : 'HARDWARE - 5x ESP32';
+    } else {
+      elements.engineMode.textContent = 'SIMULATION';
+    }
+  }
 }
 
 function computeSearchCoverage(simState) {
