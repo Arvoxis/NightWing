@@ -598,7 +598,7 @@ function dist(ax, ay, bx, by) {
 }
 function rssiAt(dx, dy, px, py) {
   const d = Math.max(0.3, dist(dx, dy, px, py));
-  return Math.max(-100, Math.min(-20, RSSI_REF - 10 * PATH_LOSS * Math.log10(d)));
+  return Math.round(Math.max(-100, Math.min(-20, RSSI_REF - 10 * PATH_LOSS * Math.log10(d))));
 }
 function rssiToConf(rssi) {
   return Math.max(0.02, Math.min(0.98, (rssi - RSSI_GATE) / (RSSI_REF - RSSI_GATE)));
@@ -1370,7 +1370,7 @@ canvas.addEventListener('mousemove', (ev)=>{
       <b>Drone ${drone.id}</b> · ${sn}<br>
       Pos  (${drone.x.toFixed(2)}, ${drone.y.toFixed(2)})<br>
       Goal (${(drone.goal?.[0]??drone.x).toFixed(2)}, ${(drone.goal?.[1]??drone.y).toFixed(2)})<br>
-      RF   ${rssi > -127 ? rssi + ' dBm  ' + RSSI_NAMES(rssi) : '---'}
+      RF   ${rssi > -127 ? Math.round(rssi) + ' dBm  ' + RSSI_NAMES(rssi) : '---'}
     `;
     tip.style.display = 'block';
     tip.style.left    = (ev.clientX + 14) + 'px';
