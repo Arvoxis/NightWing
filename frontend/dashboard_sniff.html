@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KHOJ Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;700&display=swap">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #050a12;
+  --surface:    #0a1626;
+  --surface2:   #0f1e36;
+  --border:     rgba(0, 180, 255, 0.12);
+  --border2:    rgba(0, 180, 255, 0.22);
+  --cyan:       #00d4ff;
+  --cyan-dim:   rgba(0, 212, 255, 0.18);
+  --cyan-glow:  rgba(0, 212, 255, 0.06);
+  --orange:     #ff7040;
+  --orange-dim: rgba(255, 112, 64, 0.18);
+  --green:      #2dffaa;
+  --green-dim:  rgba(45, 255, 170, 0.18);
+  --purple:     #b060ff;
+  --purple-dim: rgba(176, 96, 255, 0.18);
+  --yellow:     #ffd040;
+  --text-hi:    #e8f0fa;
+  --text-mid:   #7a9abf;
+  --text-lo:    #3a5575;
+  --fn: "Rajdhani", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", "Consolas", monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-hi);
+  font-family: var(--fn);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+#app {
+  display: grid;
+  grid-template-rows: 52px 1fr 140px;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border2);
+  background: rgba(5, 10, 18, 0.9);
+  backdrop-filter: blur(12px);
+  position: relative;
+  z-index: 20;
+  overflow: hidden;
+  min-width: 0;
+}
+.topbar::before {
+  content: "";
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), var(--purple), transparent);
+  opacity: 0.6;
+}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.brand-name {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+  text-shadow: 0 0 20px rgba(0,212,255,0.5);
+}
+.brand-sub {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--text-mid);
+  font-weight: 500;
+}
+.topbar-sep { width: 1px; height: 28px; background: var(--border2); margin: 0 4px; flex-shrink:0; }
+.top-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.top-metric .lbl {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text-lo);
+  font-weight: 600;
+}
+.top-metric .val {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
+}
+.top-metric .val.cyan  { color: var(--cyan); }
+.top-metric .val.green { color: var(--green); }
+.top-metric .val.orange{ color: var(--orange); }
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 3px 8px;
+  border-radius: 2px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
+.badge-hw  { color: var(--green);  border-color: var(--green);  background: var(--green-dim); }
+.badge-sim { color: var(--cyan);   border-color: var(--cyan);   background: var(--cyan-dim); }
+.badge-rf  { color: var(--purple); border-color: var(--purple); background: var(--purple-dim); }
+.pulse-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{ opacity:1; transform:scale(1); } 50%{ opacity:0.4; transform:scale(0.7); } }
+.spacer { flex: 1; }
+#restartBtn {
+  font-family: var(--fn);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  padding: 6px 16px;
+  background: transparent;
+  color: var(--text-mid);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color .2s, border-color .2s;
+}
+#restartBtn:hover { color: var(--cyan); border-color: var(--cyan); }
+
+/* ── Main area ───────────────────────────────────────────────── */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  overflow: hidden;
+}
+
+/* ── Map ─────────────────────────────────────────────────────── */
+.map-wrap {
+  position: relative;
+  overflow: hidden;
+  background: #020710;
+}
+#mapCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.map-labels {
+  position: absolute;
+  top: 10px; left: 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  pointer-events: none;
+}
+.map-mode-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 3px 8px;
+  background: rgba(5,10,18,0.85);
+  border: 1px solid var(--purple);
+  color: var(--purple);
+  border-radius: 2px;
+}
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  background: rgba(5,10,18,0.7);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  backdrop-filter: blur(8px);
+}
+.legend-row {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 10px; font-weight: 500; letter-spacing: 0.08em;
+  color: var(--text-mid);
+}
+.swatch {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+.sw-drone    { background: var(--cyan);   box-shadow: 0 0 6px var(--cyan); }
+.sw-victim   { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+.sw-confirm  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+.sw-rf       { background: var(--purple); box-shadow: 0 0 6px var(--purple); border-radius: 0; width: 10px; height: 2px; margin: 4px 0; }
+.sw-coverage { background: rgba(0,212,255,0.25); border: 1px solid rgba(0,212,255,0.4); border-radius: 2px; }
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+.panel {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+  flex-shrink: 0;
+}
+.panel-fill {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel-hdr {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: var(--text-lo);
+  margin-bottom: 10px;
+}
+/* Drone cards */
+.drone-card {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+  transition: border-color .3s;
+}
+.drone-card.alive  { border-color: rgba(0,212,255,0.3); }
+.drone-card.dead   { border-color: rgba(255,112,64,0.2); opacity: 0.5; }
+.drone-card.boot   { border-color: rgba(255,208,64,0.3); }
+.drone-card-top {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
+}
+.drone-id {
+  font-family: var(--mono);
+  font-size: 13px; font-weight: 700;
+  color: var(--cyan);
+  min-width: 28px;
+}
+.drone-state {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+  color: var(--text-mid); flex: 1;
+}
+.drone-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-lo); flex-shrink: 0;
+}
+.drone-status-dot.alive { background: var(--green); box-shadow: 0 0 5px var(--green); animation: pulse 2s infinite; }
+.drone-status-dot.boot  { background: var(--yellow); box-shadow: 0 0 5px var(--yellow); animation: pulse 1s infinite; }
+.drone-card-pos {
+  font-family: var(--mono);
+  font-size: 10px; color: var(--text-lo);
+  letter-spacing: 0.05em;
+}
+.rssi-bar-wrap {
+  height: 2px; background: var(--border); border-radius: 1px;
+  margin-top: 6px; overflow: hidden;
+}
+.rssi-bar {
+  height: 100%; background: var(--cyan); border-radius: 1px;
+  transition: width .5s, background .3s;
+}
+/* Stats panel */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.stat-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 6px;
+  text-align: center;
+}
+.stat-num {
+  font-family: var(--mono);
+  font-size: 22px; font-weight: 700;
+  line-height: 1;
+  margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.stat-lbl {
+  font-size: 8px; font-weight: 600;
+  letter-spacing: 0.15em; color: var(--text-lo);
+}
+.stat-num.cyan   { color: var(--cyan); }
+.stat-num.green  { color: var(--green); }
+.stat-num.orange { color: var(--orange); }
+
+/* RF sources panel */
+.rf-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.rf-item:last-child { border-bottom: none; }
+.rf-mac {
+  font-family: var(--mono);
+  font-size: 9px; color: var(--text-lo);
+  flex: 1;
+}
+.rf-rssi {
+  font-family: var(--mono);
+  font-size: 11px; font-weight: 700;
+  color: var(--purple);
+}
+.rf-kind {
+  font-size: 8px; font-weight: 700; letter-spacing: 0.1em;
+  padding: 1px 5px; border-radius: 2px;
+}
+.rf-kind.victim  { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange); }
+.rf-kind.decoy   { background: var(--cyan-dim);   color: var(--cyan);   border: 1px solid var(--cyan); }
+.rf-kind.unknown { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
+
+/* ── Event log ───────────────────────────────────────────────── */
+.event-log {
+  border-top: 1px solid var(--border2);
+  background: rgba(2, 7, 16, 0.95);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.event-log::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: 0.4;
+}
+.log-hdr {
+  padding: 6px 16px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: var(--text-lo);
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+.log-cursor {
+  width: 6px; height: 12px;
+  background: var(--cyan);
+  animation: blink 1s step-end infinite;
+  flex-shrink: 0;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+#eventLog {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 8px;
+  display: flex;
+  flex-direction: column-reverse;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+.log-line {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-lo);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: logfade .3s ease;
+}
+@keyframes logfade { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; } }
+.log-line .ts { color: var(--text-lo); }
+.log-line.ev-confirm { color: var(--green); }
+.log-line.ev-dismiss { color: var(--orange); }
+.log-line.ev-detect  { color: var(--cyan); }
+.log-line.ev-rf      { color: var(--purple); }
+.log-line.ev-sys     { color: var(--text-mid); }
+.log-line.ev-warn    { color: var(--yellow); }
+
+/* Scanline overlay on map */
+.scanline {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0,0,0,0.15) 3px,
+    rgba(0,0,0,0.15) 4px
+  );
+  z-index: 1;
+}
+
+/* Mission complete overlay */
+#missionBanner {
+  display: none;
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+}
+#missionBanner.show { display: block; animation: bannerIn .6s cubic-bezier(.16,1,.3,1); }
+@keyframes bannerIn { from{ opacity:0; transform:translate(-50%,-50%) scale(0.85); } to{ opacity:1; transform:translate(-50%,-50%) scale(1); } }
+.mission-complete-text {
+  font-size: 48px; font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--green);
+  text-shadow: 0 0 40px var(--green), 0 0 80px rgba(45,255,170,0.3);
+}
+.mission-complete-sub {
+  font-size: 13px; letter-spacing: 0.3em;
+  color: var(--text-mid);
+  margin-top: 6px;
+}
+
+/* Tooltip */
+#tooltip {
+  position: fixed;
+  background: rgba(10,22,38,0.95);
+  border: 1px solid var(--cyan);
+  border-radius: 3px;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-hi);
+  pointer-events: none;
+  display: none;
+  z-index: 100;
+  backdrop-filter: blur(8px);
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-name">KHOJ</div>
+      <div class="brand-sub">SEARCH &amp; RESCUE · SWARM COMMAND</div>
+    </div>
+    <div class="topbar-sep"></div>
+    <div class="top-metric">
+      <div class="lbl">MISSION TIME</div>
+      <div class="val cyan" id="timer">00:00:00</div>
+    </div>
+    <div class="topbar-sep"></div>
+    <div class="top-metric">
+      <div class="lbl">ACTIVE DRONES</div>
+      <div class="val" id="topDrones">0 / 0</div>
+    </div>
+    <div class="topbar-sep"></div>
+    <div class="top-metric">
+      <div class="lbl">COVERAGE</div>
+      <div class="val cyan" id="topCoverage">0%</div>
+    </div>
+    <div class="topbar-sep"></div>
+    <div class="top-metric">
+      <div class="lbl">CONFIRMED</div>
+      <div class="val green" id="topConfirmed">0</div>
+    </div>
+    <div class="topbar-sep"></div>
+    <span class="badge badge-rf" id="detectorBadge">DIGITAL SNIFFING</span>
+    <span class="badge badge-sim" id="modeBadge" style="display:none">SIMULATION</span>
+    <span class="badge badge-hw"  id="hwBadge" style="display:none">HARDWARE</span>
+    <div class="pulse-dot" id="liveDot" style="display:none"></div>
+    <div class="spacer"></div>
+    <button id="restartBtn">⟳ RESTART</button>
+  </header>
+
+  <!-- MAIN -->
+  <div class="main">
+    <!-- MAP -->
+    <div class="map-wrap">
+      <canvas id="mapCanvas"></canvas>
+      <div class="scanline"></div>
+      <div class="map-labels">
+        <div class="map-mode-badge" id="mapModeBadge">RF SIGNATURE SCAN · DIGITAL SNIFF v2</div>
+        <div class="legend">
+          <div class="legend-row"><div class="swatch sw-drone"></div>Drone (active)</div>
+          <div class="legend-row"><div class="swatch sw-victim"></div>RF Signature / Victim</div>
+          <div class="legend-row"><div class="swatch sw-confirm"></div>Confirmed Survivor</div>
+          <div class="legend-row"><div class="swatch sw-rf"></div>RF Signal Ring</div>
+          <div class="legend-row"><div class="swatch sw-coverage"></div>Area Swept</div>
+        </div>
+      </div>
+      <div id="missionBanner">
+        <div class="mission-complete-text">ALL SURVIVORS FOUND</div>
+        <div class="mission-complete-sub">SWARM RETURNING TO BASE</div>
+      </div>
+    </div>
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <!-- Drone fleet -->
+      <div class="panel">
+        <div class="panel-hdr">FLEET STATUS</div>
+        <div id="droneList"></div>
+      </div>
+
+      <!-- Stats -->
+      <div class="panel">
+        <div class="panel-hdr">MISSION STATS</div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-num cyan" id="statCoverage">0%</div>
+            <div class="stat-lbl">COVERAGE</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num green" id="statConfirmed">0</div>
+            <div class="stat-lbl">CONFIRMED</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num orange" id="statDismissed">0</div>
+            <div class="stat-lbl">DISMISSED</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RF sources -->
+      <div class="panel panel-fill">
+        <div class="panel-hdr">RF SIGNATURES DETECTED</div>
+        <div id="rfList" style="overflow-y:auto;flex:1"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- EVENT LOG -->
+  <div class="event-log">
+    <div class="log-hdr">
+      SYSTEM LOG
+      <div class="log-cursor"></div>
+    </div>
+    <div id="eventLog"></div>
+  </div>
+</div>
+<div id="tooltip"></div>
+
+<script>
+'use strict';
+/* ─── constants ─────────────────────────────────────────────────────────── */
+const GRID        = 32;
+const BASE        = [2, 2];
+const SENSOR_R    = 3.5;
+const RSSI_REF    = -35.0;
+const RSSI_GATE   = -80.0;
+const RSSI_NEAR   = -55.0;
+const PATH_LOSS   = 2.2;
+const RF_RANGE    = 14.0;
+const RF_SOLVE_D  = 1.6;
+const RF_SOLVE_T  = 1.5;
+const ALIVE_S     = 3.0;
+const CONF_CONFIRM= 0.80;
+const CONF_DISMISS= 0.22;
+const EXCL_R      = SENSOR_R * 1.5;
+const SPEED       = 1.8;         // cells / second for sim
+
+/* ─── design tokens ──────────────────────────────────────────────────────── */
+const C = {
+  bg:       '#020710',
+  grid:     '#0a1828',
+  cyan:     '#00d4ff',
+  cyanDim:  'rgba(0,212,255,0.12)',
+  orange:   '#ff7040',
+  orangeDim:'rgba(255,112,64,0.12)',
+  green:    '#2dffaa',
+  greenDim: 'rgba(45,255,170,0.12)',
+  purple:   '#b060ff',
+  purpleDim:'rgba(176,96,255,0.12)',
+  yellow:   '#ffd040',
+  textHi:   '#e8f0fa',
+  textMid:  '#7a9abf',
+  textLo:   '#3a5575',
+};
+
+/* ─── utilities ─────────────────────────────────────────────────────────── */
+function dist(ax, ay, bx, by) {
+  return Math.hypot(ax - bx, ay - by);
+}
+function rssiAt(dx, dy, px, py) {
+  const d = Math.max(0.3, dist(dx, dy, px, py));
+  return Math.max(-100, Math.min(-20, RSSI_REF - 10 * PATH_LOSS * Math.log10(d)));
+}
+function rssiToConf(rssi) {
+  return Math.max(0.02, Math.min(0.98, (rssi - RSSI_GATE) / (RSSI_REF - RSSI_GATE)));
+}
+function logit(p)   { return Math.log(p / (1 - p)); }
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+/* ─── Simulation engine ─────────────────────────────────────────────────── */
+class Sim {
+  constructor() {
+    this.rng = this._rng(7);
+    this.reset();
+  }
+  _rng(seed) {
+    let s = seed;
+    return () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0) / 0x100000000; };
+  }
+  reset() {
+    this.rng = this._rng(Math.floor(Math.random() * 9999));
+    const rng = this.rng;
+    this.tick = 0;
+    this.t    = 0;
+    this.started = Date.now();
+
+    // random victim positions (away from base)
+    this.victims = [];
+    const placed = [];
+    const kinds = ['victim','victim','victim','decoy','decoy'];
+    for (const k of kinds) {
+      let x, y, tries = 0;
+      do {
+        x = 4 + rng() * (GRID - 8);
+        y = 4 + rng() * (GRID - 8);
+        tries++;
+      } while (
+        tries < 200 &&
+        (dist(x,y,BASE[0],BASE[1]) < 9 || placed.some(p=>dist(x,y,p[0],p[1])<7))
+      );
+      placed.push([x,y]);
+      const mac = k==='victim'
+        ? `AA:BB:CC:DD:EE:0${this.victims.filter(v=>v.kind==='victim').length+1}`
+        : `AA:BB:CC:DD:FF:0${this.victims.filter(v=>v.kind==='decoy').length+1}`;
+      this.victims.push({ x, y, mac, kind: k, logOdds: {} });
+    }
+
+    // hidden phone (for RF localization)
+    let px, py, tries = 0;
+    do {
+      px = 4 + rng() * (GRID - 8);
+      py = 4 + rng() * (GRID - 8);
+      tries++;
+    } while (tries < 200 && (dist(px,py,BASE[0],BASE[1]) < 12 || placed.some(p=>dist(px,py,p[0],p[1])<8)));
+    this.phone    = [px, py];
+    this.phoneLive= true;
+
+    // drones
+    const N = 4;
+    this.drones = Array.from({length: N}, (_, i) => {
+      const ang = 2 * Math.PI * i / N;
+      return {
+        id: i + 1,
+        x:  BASE[0] + 0.6 * Math.cos(ang),
+        y:  BASE[1] + 0.6 * Math.sin(ang),
+        heading: ang,
+        goal: [BASE[0], BASE[1]],
+        state: 0,
+        alive: true,
+        rssi: -128,
+        logRssi: -128,
+        trail: [],
+        rfNearSince: null,
+        rfSolved: false,
+      };
+    });
+    this.swarmMACs = new Set(this.drones.map(d=>`FF:FF:FF:FF:FF:0${d.id}`));
+    this.coverage  = Array.from({length:GRID}, ()=>new Float32Array(GRID));
+    this.confirmed = [];
+    this.dismissed = [];
+    this.rfRings   = [];
+    this.detFlashes= [];
+    this.events    = [];
+    this.rfFinal   = null;
+    this.missionDone = false;
+    this._goals    = {};   // drone id → [gx, gy]
+    this._claimed  = [];   // claimed frontier cells
+    this._rebuildFrontier();
+  }
+
+  _rebuildFrontier() {
+    const unexplored = [];
+    for (let gy = 0; gy < GRID; gy++) {
+      for (let gx = 0; gx < GRID; gx++) {
+        if (this.coverage[gy][gx] < 0.5) unexplored.push([gx, gy]);
+      }
+    }
+    this._unexplored = unexplored;
+  }
+
+  _pickFrontier(drone) {
+    const others = this.drones.filter(d => d.id !== drone.id && d.alive);
+    const avail  = this._unexplored.filter(([gx, gy]) => {
+      if (this._claimed.some(c=>dist(gx,gy,c[0],c[1]) < 2)) return false;
+      if (others.some(o => dist(gx, gy, o.x, o.y) < EXCL_R)) return false;
+      if (others.some(o => o.goal && dist(gx,gy,o.goal[0],o.goal[1]) < EXCL_R)) return false;
+      return true;
+    });
+    if (!avail.length) {
+      // relax exclusion
+      const any = this._unexplored.filter(([gx,gy]) => !this._claimed.some(c=>dist(gx,gy,c[0],c[1])<2));
+      if (!any.length) return null;
+      // pick maximally spread from existing goals
+      const claimed = this._claimed;
+      if (!claimed.length) {
+        const cl = any.reduce((a,b) => dist(b[0],b[1],drone.x,drone.y) < dist(a[0],a[1],drone.x,drone.y) ? b : a);
+        return cl;
+      }
+      return any.reduce((best, p) => {
+        const sd = Math.min(...claimed.map(c=>dist(p[0],p[1],c[0],c[1])));
+        const bd = Math.min(...claimed.map(c=>dist(best[0],best[1],c[0],c[1])));
+        return sd > bd ? p : best;
+      });
+    }
+    const claimed = this._claimed;
+    if (!claimed.length) {
+      return avail.reduce((a,b) => dist(b[0],b[1],drone.x,drone.y) < dist(a[0],a[1],drone.x,drone.y) ? b : a);
+    }
+    return avail.reduce((best, p) => {
+      const sd = Math.min(...claimed.map(c=>dist(p[0],p[1],c[0],c[1])));
+      const bd = Math.min(...claimed.map(c=>dist(best[0],best[1],c[0],c[1])));
+      return sd > bd ? p : best;
+    });
+  }
+
+  _markCoverage(x, y) {
+    const r = SENSOR_R;
+    for (let gy = Math.max(0, Math.floor(y-r)); gy <= Math.min(GRID-1, Math.ceil(y+r)); gy++) {
+      for (let gx = Math.max(0, Math.floor(x-r)); gx <= Math.min(GRID-1, Math.ceil(x+r)); gx++) {
+        if (dist(gx, gy, x, y) <= r) this.coverage[gy][gx] = 1.0;
+      }
+    }
+  }
+
+  _log(msg, type='sys') {
+    const sec = Math.floor((Date.now() - this.started) / 1000);
+    const mm  = String(Math.floor(sec/60)).padStart(2,'0');
+    const ss  = String(sec % 60).padStart(2,'0');
+    this.events.unshift({ ts: `${mm}:${ss}`, msg, type });
+    if (this.events.length > 80) this.events.pop();
+    addLog(`${mm}:${ss}`, msg, type);
+  }
+
+  step(dt) {
+    if (this.missionDone) {
+      this.drones.forEach(d=>{
+        d.state = 0;
+        const dx = BASE[0]-d.x, dy = BASE[1]-d.y;
+        const dist_ = Math.hypot(dx,dy);
+        if (dist_ > 0.1) {
+          const step = Math.min(SPEED*dt, dist_);
+          d.x += step*dx/dist_; d.y += step*dy/dist_;
+          d.heading = Math.atan2(dy,dx);
+        }
+        d.trail.push([d.x, d.y]);
+        if (d.trail.length > 35) d.trail.shift();
+      });
+      return;
+    }
+
+    this.t += dt;
+    this.tick++;
+
+    // occasionally rebuild frontier (~every 50 ticks)
+    if (this.tick % 50 === 0) this._rebuildFrontier();
+    if (this.tick % 50 === 0) this._claimed = [];
+
+    // assign new frontiers to searching drones
+    for (const d of this.drones) {
+      if (!d.alive || d.state !== 0) continue;
+      const cur = d.goal;
+      if (!cur || dist(d.x,d.y,cur[0],cur[1]) < 1.2) {
+        const f = this._pickFrontier(d);
+        if (f) { d.goal = f; this._claimed.push(f); }
+        else    { d.goal = [BASE[0]+this.rng()*8+4, BASE[1]+this.rng()*8+4]; }
+      }
+    }
+
+    const now = Date.now();
+
+    for (const d of this.drones) {
+      if (!d.alive) continue;
+
+      // move
+      const [tx, ty] = d.goal || BASE;
+      const dx = tx-d.x, dy = ty-d.y;
+      const dist_ = Math.hypot(dx,dy);
+      if (dist_ > 0.05) {
+        const step = Math.min(SPEED*dt, dist_);
+        d.x += step*dx/dist_; d.y += step*dy/dist_;
+        d.heading = Math.atan2(dy,dx);
+      }
+      d.x = Math.max(0, Math.min(GRID-0.01, d.x));
+      d.y = Math.max(0, Math.min(GRID-0.01, d.y));
+
+      // trail
+      d.trail.push([d.x, d.y]);
+      if (d.trail.length > 40) d.trail.shift();
+
+      // coverage
+      this._markCoverage(d.x, d.y);
+
+      // ── DIGITAL SNIFFING: dynamic RSSI per drone per tick ──
+      let bestRssi = RSSI_GATE, bestVic = null;
+      for (const v of this.victims) {
+        const rssi = rssiAt(d.x, d.y, v.x, v.y);
+        if (rssi > bestRssi) { bestRssi = rssi; bestVic = v; }
+      }
+      d.rssi = rssi_at_phone(d, this.phone, this.phoneLive);
+
+      if (bestVic) {
+        const conf = rssiToConf(bestRssi);
+        const lo   = logit(conf);
+        if (!bestVic.logOdds[d.id]) bestVic.logOdds[d.id] = 0;
+        bestVic.logOdds[d.id] += lo * dt;
+
+        const totalLo = Object.values(bestVic.logOdds).reduce((a,b)=>a+b,0);
+        const belief  = sigmoid(totalLo);
+
+        if (bestRssi > RSSI_GATE + 15) {
+          // Rate-limit: one ring per victim per 0.7s to avoid spiral overload
+          if (!bestVic._lastRing || (now - bestVic._lastRing) > 700) {
+            bestVic._lastRing = now;
+            this.rfRings.push({ x: bestVic.x, y: bestVic.y,
+                                r: 0, maxR: 1.8, alpha: 0.55, color: C.purple, speed: 5 });
+          }
+          if (!d._lastFlash || (now - d._lastFlash) > 400) {
+            d._lastFlash = now;
+            this.detFlashes.push({ x: d.x, y: d.y, age: 0 });
+          }
+        }
+
+        if (belief >= CONF_CONFIRM && !this.confirmed.some(c=>dist(c.x,c.y,bestVic.x,bestVic.y)<3)) {
+          this.confirmed.push({ x: bestVic.x, y: bestVic.y, kind: bestVic.kind, t: now });
+          if (bestVic.kind === 'victim') {
+            this._log(`CONFIRMED survivor at (${bestVic.x.toFixed(1)},${bestVic.y.toFixed(1)})`, 'confirm');
+            this.rfRings.push({ x: bestVic.x, y: bestVic.y, r: 0, maxR: 4, alpha: 1, color: C.green, speed: 2.5 });
+          } else {
+            this._log(`DISMISSED false positive (decoy) at (${bestVic.x.toFixed(1)},${bestVic.y.toFixed(1)})`, 'dismiss');
+            this.dismissed.push({ x: bestVic.x, y: bestVic.y });
+          }
+        }
+      }
+
+      // RF phone localization
+      if (this.phoneLive && !d.rfSolved) {
+        const dph = dist(d.x, d.y, this.phone[0], this.phone[1]);
+        d.logRssi = dph < RF_RANGE ? rssiAt(d.x,d.y,this.phone[0],this.phone[1]) : -128;
+        if (dph < RF_SOLVE_D) {
+          if (!d.rfNearSince) d.rfNearSince = now;
+          if (now - d.rfNearSince > RF_SOLVE_T * 1000) {
+            d.rfSolved = true;
+            this.phoneLive = false;
+            this.rfFinal   = [...this.phone];
+            this._log(`RF source localized at (${this.phone[0].toFixed(1)},${this.phone[1].toFixed(1)})`, 'rf');
+            this.rfRings.push({ x: this.phone[0], y: this.phone[1], r: 0, maxR: 5, alpha: 0.9, color: C.purple, speed: 3 });
+          }
+        } else {
+          d.rfNearSince = null;
+        }
+      }
+    }
+
+    // age RF rings
+    this.rfRings = this.rfRings.filter(r => r.alpha > 0.02);
+    for (const r of this.rfRings) {
+      r.r     += r.speed * dt;
+      r.alpha -= dt * 0.45;
+      if (r.r >= r.maxR) r.alpha = 0;
+    }
+
+    // age detection flashes
+    this.detFlashes = this.detFlashes.filter(f => f.age < 1);
+    for (const f of this.detFlashes) f.age += dt * 2;
+
+    // check mission
+    const nVictims  = this.victims.filter(v=>v.kind==='victim').length;
+    const nDecoys   = this.victims.filter(v=>v.kind==='decoy').length;
+    const nConf     = this.confirmed.filter(c=>c.kind==='victim').length;
+    const nDism     = this.confirmed.filter(c=>c.kind==='decoy').length;
+    if (nVictims > 0 && nConf >= nVictims && nDism >= nDecoys) {
+      if (!this.missionDone) {
+        this.missionDone = true;
+        this._log('MISSION COMPLETE — all survivors found', 'confirm');
+        document.getElementById('missionBanner').classList.add('show');
+      }
+    }
+  }
+
+  coveragePct() {
+    let n = 0;
+    for (let gy = 0; gy < GRID; gy++)
+      for (let gx = 0; gx < GRID; gx++)
+        if (this.coverage[gy][gx] > 0) n++;
+    return (n / (GRID * GRID) * 100).toFixed(0);
+  }
+}
+
+function rssi_at_phone(d, phone, live) {
+  if (!live || !phone) return -128;
+  const dd = dist(d.x, d.y, phone[0], phone[1]);
+  if (dd > RF_RANGE) return -128;
+  return Math.max(-100, Math.min(-20, Math.round(RSSI_REF - 10 * PATH_LOSS * Math.log10(Math.max(0.3,dd)))));
+}
+
+/* ─── Canvas renderer ───────────────────────────────────────────────────── */
+class Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx    = canvas.getContext('2d');
+    this.dpr    = window.devicePixelRatio || 1;
+    this.resize();
+    window.addEventListener('resize', ()=>this.resize());
+  }
+  resize() {
+    // Use the canvas's own CSS-rendered size (set by the grid 1fr constraint),
+    // never set style.width/height — that would fight the grid column sizing.
+    const w = this.canvas.clientWidth  || 0;
+    const h = this.canvas.clientHeight || 0;
+    if (w < 10 || h < 10) return;
+    this.canvas.width  = w * this.dpr;
+    this.canvas.height = h * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.W = w; this.H = h;
+    this.cell = Math.max(1, Math.min(w, h) / (GRID + 2));
+    this.ox   = (w - this.cell * GRID) / 2;
+    this.oy   = (h - this.cell * GRID) / 2;
+  }
+  gx(x) { return this.ox + x * this.cell; }
+  gy(y) { return this.oy + y * this.cell; }
+
+  draw(sim, hwState) {
+    const { ctx, W, H, cell } = this;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const state = hwState || sim;
+
+    // ── coverage ──────────────────────────────────────────────
+    ctx.save();
+    for (let gy = 0; gy < GRID; gy++) {
+      for (let gx = 0; gx < GRID; gx++) {
+        const v = state.coverage[gy][gx];
+        if (v > 0) {
+          ctx.fillStyle = `rgba(0,180,255,${v * 0.13})`;
+          ctx.fillRect(this.gx(gx), this.gy(gy), cell, cell);
+        }
+      }
+    }
+    ctx.restore();
+
+    // ── grid lines ────────────────────────────────────────────
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,40,80,0.5)';
+    ctx.lineWidth   = 0.5;
+    for (let i = 0; i <= GRID; i++) {
+      ctx.beginPath(); ctx.moveTo(this.gx(i), this.gy(0)); ctx.lineTo(this.gx(i), this.gy(GRID)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(this.gx(0), this.gy(i)); ctx.lineTo(this.gx(GRID), this.gy(i)); ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── base marker ───────────────────────────────────────────
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,212,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,3]);
+    const bx = this.gx(BASE[0]), by = this.gy(BASE[1]);
+    ctx.strokeRect(bx - cell*1.5, by - cell*1.5, cell*3, cell*3);
+    ctx.setLineDash([]);
+    ctx.font = `bold ${cell*0.65}px ${C.fn}, sans-serif`;
+    ctx.fillStyle = 'rgba(0,212,255,0.35)';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('BASE', bx, by);
+    ctx.restore();
+
+    // ── RF rings ──────────────────────────────────────────────
+    ctx.save();
+    for (const r of state.rfRings) {
+      ctx.beginPath();
+      ctx.arc(this.gx(r.x), this.gy(r.y), Math.max(0.001, r.r * cell), 0, 2*Math.PI);
+      ctx.strokeStyle = r.color.replace(')',`,${r.alpha})`).replace('rgb','rgba').replace('#','rgba(0,0,0,').replace('rgba(0,0,0,','').replace('##',r.color);
+      // easier:
+      const hex = r.color;
+      const rgb = hexToRgb(hex);
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${r.alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── det flashes ───────────────────────────────────────────
+    ctx.save();
+    for (const f of state.detFlashes) {
+      const a = 1 - f.age;
+      ctx.beginPath();
+      ctx.arc(this.gx(f.x), this.gy(f.y), Math.max(0.001, (f.age * 2 + 0.3) * cell), 0, 2*Math.PI);
+      ctx.strokeStyle = `rgba(0,212,255,${a*0.6})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── hidden phone ──────────────────────────────────────────
+    if (state.phoneLive && state.phone) {
+      const px = this.gx(state.phone[0]), py = this.gy(state.phone[1]);
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(0.001, cell * (0.4 + pulse * 0.2)), 0, 2*Math.PI);
+      ctx.fillStyle = `rgba(176,96,255,${0.15 + pulse*0.1})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(176,96,255,${0.4 + pulse*0.3})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── victims (ground truth, shown as dim heat sig) ─────────
+    for (const v of (state.victims || [])) {
+      // Only draw if not yet confirmed
+      const alreadyConf = (state.confirmed||[]).some(c=>dist(c.x,c.y,v.x,v.y)<2);
+      if (alreadyConf) continue;
+      const px = this.gx(v.x), py = this.gy(v.y);
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 600 + v.x);
+      ctx.save();
+      const grad = ctx.createRadialGradient(px,py,0,px,py,cell*(0.8+pulse*0.3));
+      if (v.kind==='victim') {
+        grad.addColorStop(0, `rgba(255,112,64,${0.3+pulse*0.2})`);
+        grad.addColorStop(1, 'rgba(255,112,64,0)');
+      } else {
+        grad.addColorStop(0, `rgba(0,212,255,${0.15+pulse*0.1})`);
+        grad.addColorStop(1, 'rgba(0,212,255,0)');
+      }
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(0.001, cell * (1.2 + pulse*0.3)), 0, 2*Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ── dismissed ─────────────────────────────────────────────
+    for (const c of (state.dismissed||[])) {
+      const cx = this.gx(c.x), cy = this.gy(c.y);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,112,64,0.3)';
+      ctx.lineWidth = 1.5;
+      const r = cell * 0.5;
+      ctx.beginPath(); ctx.moveTo(cx-r,cy-r); ctx.lineTo(cx+r,cy+r); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+r,cy-r); ctx.lineTo(cx-r,cy+r); ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── confirmed survivors ───────────────────────────────────
+    for (const c of (state.confirmed||[])) {
+      if (c.kind !== 'victim') continue;
+      const cx = this.gx(c.x), cy = this.gy(c.y);
+      const age = (Date.now() - c.t) / 1000;
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+      ctx.save();
+      // outer glow
+      ctx.shadowColor = C.green; ctx.shadowBlur = 15 + pulse*8;
+      ctx.strokeStyle = `rgba(45,255,170,${0.6+pulse*0.3})`;
+      ctx.lineWidth = 1.5;
+      const r = cell * 0.85;
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(0.001, r), 0, 2*Math.PI); ctx.stroke();
+      ctx.shadowBlur = 0;
+      // crosshair
+      ctx.strokeStyle = `rgba(45,255,170,0.9)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx-r*1.4,cy); ctx.lineTo(cx-r*0.4,cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+r*0.4,cy); ctx.lineTo(cx+r*1.4,cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx,cy-r*1.4); ctx.lineTo(cx,cy-r*0.4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx,cy+r*0.4); ctx.lineTo(cx,cy+r*1.4); ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── RF final estimate ────────────────────────────────────
+    if (state.rfFinal) {
+      const rx = this.gx(state.rfFinal[0]), ry = this.gy(state.rfFinal[1]);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(176,96,255,0.7)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.arc(rx,ry,Math.max(0.001,cell*0.6),0,2*Math.PI); ctx.stroke();
+      ctx.setLineDash([]);
+      const r2 = cell*0.9;
+      ctx.strokeStyle='rgba(176,96,255,0.5)';
+      ctx.beginPath(); ctx.moveTo(rx-r2,ry); ctx.lineTo(rx+r2,ry); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rx,ry-r2); ctx.lineTo(rx,ry+r2); ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── drone trails ──────────────────────────────────────────
+    for (const d of (state.drones||[])) {
+      if (!d.trail || d.trail.length < 2) continue;
+      ctx.save();
+      for (let i = 1; i < d.trail.length; i++) {
+        const a  = i / d.trail.length;
+        const [x1,y1] = d.trail[i-1];
+        const [x2,y2] = d.trail[i];
+        ctx.beginPath();
+        ctx.moveTo(this.gx(x1), this.gy(y1));
+        ctx.lineTo(this.gx(x2), this.gy(y2));
+        ctx.strokeStyle = `rgba(0,212,255,${a*0.4})`;
+        ctx.lineWidth   = a * 2;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // ── drones ────────────────────────────────────────────────
+    for (const d of (state.drones||[])) {
+      const alive = hwState ? d.alive : true;
+      const dx = this.gx(d.x), dy = this.gy(d.y);
+      const r  = cell * 0.45;
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300 + d.id);
+
+      ctx.save();
+      // glow
+      ctx.shadowColor = C.cyan; ctx.shadowBlur = 8 + pulse * 6;
+      ctx.fillStyle   = alive ? `rgba(0,212,255,${0.15+pulse*0.1})` : 'rgba(255,112,64,0.1)';
+      ctx.beginPath(); ctx.arc(dx, dy, Math.max(0.001, r * 1.8), 0, 2*Math.PI); ctx.fill();
+      ctx.shadowBlur  = 0;
+
+      // body
+      ctx.strokeStyle = alive ? C.cyan : C.orange;
+      ctx.lineWidth   = 1.5;
+      ctx.fillStyle   = alive ? 'rgba(0,212,255,0.25)' : 'rgba(255,112,64,0.15)';
+      ctx.beginPath(); ctx.arc(dx, dy, Math.max(0.001, r), 0, 2*Math.PI);
+      ctx.fill(); ctx.stroke();
+
+      // heading arrow
+      const hx = dx + Math.cos(d.heading||0) * r * 1.5;
+      const hy = dy + Math.sin(d.heading||0) * r * 1.5;
+      ctx.strokeStyle = alive ? 'rgba(0,212,255,0.7)' : 'rgba(255,112,64,0.5)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(hx, hy); ctx.stroke();
+
+      // label
+      ctx.fillStyle   = alive ? C.textHi : C.orange;
+      ctx.font        = `bold ${cell*0.55}px JetBrains Mono, monospace`;
+      ctx.textAlign   = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(d.id || '?', dx, dy);
+      ctx.restore();
+
+      // goal line
+      if (d.goal && d.state === 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0,212,255,0.1)';
+        ctx.lineWidth   = 0.5;
+        ctx.setLineDash([3,5]);
+        ctx.beginPath();
+        ctx.moveTo(dx, dy);
+        ctx.lineTo(this.gx(d.goal[0]), this.gy(d.goal[1]));
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return {r,g,b};
+}
+
+/* ─── UI updates ────────────────────────────────────────────────────────── */
+const logLines = [];
+function addLog(ts, msg, type='sys') {
+  const el  = document.createElement('div');
+  el.className = `log-line ev-${type}`;
+  el.innerHTML = `<span class="ts">[${ts}]</span> ${escHtml(msg)}`;
+  const log = document.getElementById('eventLog');
+  log.insertBefore(el, log.firstChild);
+  logLines.push(el);
+  if (logLines.length > 60) { log.removeChild(logLines.shift()); }
+}
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+const STATE_NAMES = { 0:'SEARCH', 1:'REOBSERVE', 2:'RF-LOC', 3:'RETURNING' };
+const RSSI_NAMES  = (r) => r > -55 ? 'STRONG' : r > -70 ? 'GOOD' : r > -85 ? 'WEAK' : '---';
+
+function updateUI(state, isHW) {
+  const drones   = state.drones   || [];
+  const confirmed= state.confirmed|| [];
+  const victims  = state.victims  || [];
+  const alive    = drones.filter(d=>d.alive!==false);
+
+  // topbar
+  const sec = Math.floor((Date.now() - missionStart) / 1000);
+  const mm  = String(Math.floor(sec/60)).padStart(2,'0');
+  const ss  = String(sec%60).padStart(2,'0');
+  const hh  = String(Math.floor(sec/3600)).padStart(2,'0');
+  document.getElementById('timer').textContent = `${hh}:${mm}:${ss}`;
+  document.getElementById('topDrones').textContent    = `${alive.length} / ${drones.length}`;
+  document.getElementById('topCoverage').textContent  = (state.coveragePct ? state.coveragePct() : state.coveragePctVal || '0') + '%';
+  document.getElementById('topConfirmed').textContent = confirmed.filter(c=>c.kind==='victim'||c.confirmed).length;
+
+  document.getElementById('statCoverage').textContent = (state.coveragePct ? state.coveragePct() : state.coveragePctVal || '0') + '%';
+  document.getElementById('statConfirmed').textContent= confirmed.filter(c=>c.kind==='victim'||c.confirmed).length;
+  document.getElementById('statDismissed').textContent= confirmed.filter(c=>c.kind==='decoy'||c.dismissed).length;
+
+  // mode badges
+  document.getElementById('modeBadge').style.display = isHW ? 'none' : '';
+  document.getElementById('hwBadge').style.display   = isHW ? '' : 'none';
+  document.getElementById('liveDot').style.display   = isHW ? '' : 'none';
+
+  // drone list
+  const dl = document.getElementById('droneList');
+  dl.innerHTML = '';
+  for (const d of drones) {
+    const alive2 = d.alive !== false;
+    const booting = d.alive === undefined && !d.goals_back;
+    const cls  = booting ? 'boot' : alive2 ? 'alive' : 'dead';
+    const stName = STATE_NAMES[d.state||d.last_state||0] || 'SEARCH';
+    const rssi = d.logRssi ?? d.rssi ?? -128;
+    const rssiPct = Math.max(0, Math.min(100, ((rssi+100)/65)*100));
+    const card = document.createElement('div');
+    card.className = `drone-card ${cls}`;
+    card.innerHTML = `
+      <div class="drone-card-top">
+        <div class="drone-id">D${d.id||d.real_id||'?'}</div>
+        <div class="drone-state">${stName}</div>
+        <div class="drone-status-dot ${cls}"></div>
+      </div>
+      <div class="drone-card-pos">
+        ${(d.x||0).toFixed(1)},${(d.y||0).toFixed(1)} →
+        ${(d.goal?.[0]||d.x||0).toFixed(1)},${(d.goal?.[1]||d.y||0).toFixed(1)}
+        &nbsp;&nbsp;RF ${rssi>-127 ? rssi+'dBm' : '---'}
+      </div>
+      <div class="rssi-bar-wrap"><div class="rssi-bar" style="width:${rssiPct}%;${rssiPct>50?'background:var(--cyan)':rssiPct>25?'background:var(--yellow)':'background:var(--orange)'}"></div></div>
+    `;
+    dl.appendChild(card);
+  }
+
+  // RF list
+  const rl = document.getElementById('rfList');
+  rl.innerHTML = '';
+  for (const v of victims) {
+    const conf = (state.confirmed||[]).find(c=>dist(c.x,c.y,v.x,v.y)<2);
+    const kindLabel = conf ? (conf.kind==='victim'?'CONFIRMED':'DISMISSED') : 'SCANNING';
+    const klass = conf ? (conf.kind==='victim'?'victim':'decoy') : 'unknown';
+    const row = document.createElement('div');
+    row.className = 'rf-item';
+    row.innerHTML = `
+      <div class="rf-mac">${v.mac}</div>
+      <span class="rf-kind ${klass}">${kindLabel}</span>
+    `;
+    rl.appendChild(row);
+  }
+}
+
+/* ─── Backend connection ────────────────────────────────────────────────── */
+let ws = null, wsOk = false, hwState = null;
+function connectWS() {
+  if (ws) try { ws.close(); } catch(e) {}
+  ws = new WebSocket('ws://127.0.0.1:8000/ws');
+  ws.onopen  = ()=>{ wsOk=true; console.log('WS connected'); };
+  ws.onclose = ()=>{ wsOk=false; hwState=null; ws=null; setTimeout(connectWS, 3000); };
+  ws.onerror = ()=>{ wsOk=false; };
+  ws.onmessage = (ev)=>{
+    try {
+      const data = JSON.parse(ev.data);
+      if (data && data.boards) hwState = normalizeHW(data);
+    } catch(e){}
+  };
+}
+
+function normalizeHW(data) {
+  const boards = data.boards || [];
+  return {
+    drones:   boards.map(b=>({
+      id:       b.id,
+      x:        b.x, y: b.y,
+      heading:  b.heading,
+      goal:     b.goal ? {0:b.goal[0],1:b.goal[1]} : null,
+      state:    b.state ?? 0,
+      alive:    b.alive,
+      rssi:     b.rssi ?? -128,
+      logRssi:  b.rssi ?? -128,
+      trail:    [],
+    })),
+    coverage:  data.known || Array.from({length:GRID},()=>new Float32Array(GRID)),
+    confirmed: [
+      ...(data.confirmed||[]).map(c=>({x:c[0],y:c[1],kind:'victim',t:Date.now()})),
+      ...(data.dismissed||[]).map(c=>({x:c[0],y:c[1],kind:'decoy', t:Date.now()})),
+    ],
+    dismissed: (data.dismissed||[]).map(c=>({x:c[0],y:c[1]})),
+    victims:   (data.ground_truth?.victims||[]),
+    phone:     data.ground_truth?.phone || null,
+    phoneLive: !!data.ground_truth?.phone,
+    rfFinal:   data.rf,
+    rfRings:   [],
+    detFlashes:[],
+    missionDone: data.mission_complete,
+    coveragePctVal: (() => {
+      const mat = data.known;
+      if (!mat) return '0';
+      let n=0;
+      for (const row of mat) for (const v of row) if (v>0) n++;
+      return (n/(GRID*GRID)*100).toFixed(0);
+    })(),
+  };
+}
+
+/* ─── restart ───────────────────────────────────────────────────────────── */
+document.getElementById('restartBtn').addEventListener('click', async ()=>{
+  sim.reset();
+  document.getElementById('missionBanner').classList.remove('show');
+  document.getElementById('eventLog').innerHTML = '';
+  missionStart = Date.now();
+  try { await fetch('http://127.0.0.1:8000/restart',{method:'POST'}); } catch(e){}
+  addLog('00:00','Mission restarted','sys');
+});
+
+/* ─── main loop ─────────────────────────────────────────────────────────── */
+const sim    = new Sim();
+const canvas = document.getElementById('mapCanvas');
+const rdr    = new Renderer(canvas);
+let missionStart = Date.now();
+let last = performance.now();
+
+addLog('00:00', 'KHOJ Digital Sniffing bridge initialised', 'sys');
+addLog('00:00', `Grid ${GRID}×${GRID}  |  ${sim.victims.filter(v=>v.kind==='victim').length} victims + ${sim.victims.filter(v=>v.kind==='decoy').length} decoys placed`, 'sys');
+addLog('00:00', 'Any RF signature not belonging to the swarm = potential victim', 'detect');
+addLog('00:00', 'Attempting to connect to backend at ws://127.0.0.1:8000/ws …', 'sys');
+connectWS();
+
+function frame(now) {
+  const dt  = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  const useHW = wsOk && hwState;
+
+  if (!useHW) sim.step(dt);
+
+  const state = useHW ? hwState : sim;
+  rdr.draw(sim, useHW ? hwState : null);
+  updateUI(state, useHW);
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// tooltip on canvas (show drone details)
+canvas.addEventListener('mousemove', (ev)=>{
+  const tip = document.getElementById('tooltip');
+  const rect = canvas.getBoundingClientRect();
+  const mx = (ev.clientX - rect.left) / rect.width * rdr.W;
+  const my = (ev.clientY - rect.top)  / rect.height * rdr.H;
+  const gx = (mx - rdr.ox) / rdr.cell;
+  const gy = (my - rdr.oy) / rdr.cell;
+  const state = (wsOk && hwState) ? hwState : sim;
+  const drone = (state.drones||[]).find(d=>dist(d.x,d.y,gx,gy)<1.2);
+  if (drone) {
+    const sn = STATE_NAMES[drone.state??0]||'SEARCH';
+    const rssi = drone.logRssi ?? drone.rssi ?? -128;
+    tip.innerHTML = `
+      <b>Drone ${drone.id}</b> · ${sn}<br>
+      Pos  (${drone.x.toFixed(2)}, ${drone.y.toFixed(2)})<br>
+      Goal (${(drone.goal?.[0]??drone.x).toFixed(2)}, ${(drone.goal?.[1]??drone.y).toFixed(2)})<br>
+      RF   ${rssi > -127 ? rssi + ' dBm  ' + RSSI_NAMES(rssi) : '---'}
+    `;
+    tip.style.display = 'block';
+    tip.style.left    = (ev.clientX + 14) + 'px';
+    tip.style.top     = (ev.clientY - 10) + 'px';
+  } else {
+    tip.style.display = 'none';
+  }
+});
+canvas.addEventListener('mouseleave', ()=>{ document.getElementById('tooltip').style.display='none'; });
+</script>
+</body>
+</html>

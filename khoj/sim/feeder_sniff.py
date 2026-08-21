@@ -508,7 +508,7 @@ def _print_row(tick: int, phone, bodies: list):
                         str(b.real_id) if b.real_id else "?",
                         b.x, b.y, b.goal[0], b.goal[1],
                         state,
-                        "OK  " if b.alive() else "DEAD",
+                        "OK  " if b.alive() else ("BOOT" if b.last_rx == 0.0 else "DEAD"),
                         b.goals_back, b.sent + 1))
     if phone:
         dists = [math.hypot(b.x - phone[0], b.y - phone[1])
