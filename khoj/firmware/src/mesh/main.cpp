@@ -54,11 +54,20 @@
 #define PEER_TIMEOUT_MS   2000
 
 // ---- P5: cooperative RF localization ---------------------------------------
-//  BEACON_ID is the board playing the victim's phone. It runs this same
-//  firmware and does nothing special — it just exists and transmits. Every
-//  agent reads its signal strength for free from the ESP-NOW receive callback.
-#define BEACON_ID         5
+//  BEACON_ID would be a board playing a PHYSICAL victim phone (others measure
+//  the RSSI of its ESP-NOW packets to localize it). In the laptop-in-the-loop
+//  demo the phone is SIMULATED — the feeder sends each board a synthetic RSSI vs
+//  a virtual phone — so no board should be a beacon. Set to 255 (no board has
+//  that id) so all five boards are equal searchers: they search, detect, and do
+//  RF. Restore a real id (e.g. 5) only for a hardware-only RF demo with a real
+//  transmitter board.
+#define BEACON_ID         255
 #define RF_GATE_DBM       -85   // ignore samples weaker than this
+//  A board only DIVERTS to chase the RF gradient when its OWN signal is this
+//  strong (i.e. it is genuinely near the source). Weaker boards keep searching,
+//  so the RF fix never drags the whole swarm off the map — it stays smooth like
+//  the pure-search sim, and only the closest one or two converge on the phone.
+#define RF_NEAR_DBM       -60
 #define RF_SAMPLE_MS      500   // how often to share my reading
 #define RF_STALE_MS       6000  // drop a peer's sample older than this
 #define RF_MIN_SAMPLES    2     // one reading locates nothing; two start to
@@ -893,17 +902,21 @@ void loop() {
       usb_goal_t g = {};
       g.msg_type = MSG_GOAL;
       g.agent_id = myId;
-      // THE DECISION. Once the swarm has pooled enough readings to place the
-      // source, fly at it; otherwise hold. This is the whole cooperative
-      // gradient: move toward the estimate, resample there, re-estimate.
-      // Priority: a task I won in the auction beats routine RF sweeping —
-      // an uncertain sighting is time-critical in a way the gradient is not.
-      if (myTask && myId != BEACON_ID) {
+      // THE DECISION, in priority order:
+      //   1. a REOBSERVE task I won in the auction (a time-critical sighting)
+      //   2. the RF gradient, but ONLY if MY own signal is strong — i.e. I'm
+      //      genuinely near the source. This is the key to staying smooth: a far
+      //      board hearing the swarm's shared fix does NOT abandon its search to
+      //      pile onto the phone; only the closest one or two converge, while
+      //      everyone else keeps covering ground, exactly like the search-only
+      //      sim. (simRssi is what the laptop last told me I hear; -128 = nothing.)
+      //   3. otherwise SEARCH — hold, and let the laptop hand me a frontier goal.
+      if (myTask) {
         g.goal_x = myTaskX;
         g.goal_y = myTaskY;
         g.state  = STATE_REOBSERVE;
         g.cur_task = myTask;
-      } else if (rfLocked && myId != BEACON_ID) {
+      } else if (rfLocked && simRssi != -128 && simRssi >= RF_NEAR_DBM) {
         float gx2, gy2;
         float dx = rfEstX - myX, dy = rfEstY - myY;
         float d = sqrtf(dx * dx + dy * dy);

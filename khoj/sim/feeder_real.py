@@ -637,20 +637,25 @@ def main():
     ap.add_argument("--weights", default=None, help="path to best.pt (else auto-resolved)")
     ap.add_argument("--sard", default="SARD_YOLO.v1-original.yolov11/test",
                     help="SARD test split (images/ + labels/)")
-    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"),
-                    default=[22.0, 24.0], help="hidden phone (boards never see it)")
-    ap.add_argument("--no-phone", action="store_true")
+    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"), default=None,
+                    help="OPT-IN RF demo: hidden phone at X Y (boards never see it). "
+                         "OFF by default so the swarm behaves like the pure-search "
+                         "python sim. With the RF-near firmware gate, turning it on "
+                         "only pulls the closest drone or two onto the phone; the "
+                         "rest keep searching.")
+    ap.add_argument("--no-phone", action="store_true", help="(kept for compatibility; "
+                    "phone is already off unless --phone is given)")
     ap.add_argument("--rf-range", type=float, default=12.0,
-                    help="phone is only 'audible' within this many cells. Keeps the "
-                         "firmware from RF-locking the whole swarm from t=0 (the "
-                         "grid is only 32 wide) - drones search first, then converge "
-                         "on RF once a couple get near. 0 = audible everywhere.")
+                    help="when --phone is on, it's only 'audible' within this many "
+                         "cells (the grid is 32 wide). 0 = audible everywhere.")
     ap.add_argument("--victims", default="10,10;26,8", help="real survivors 'x,y;x,y'")
     ap.add_argument("--decoys", default="6,20;18,17", help="false alarms")
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--beacon", type=int, default=5,
-                    help="board id that is the fixed beacon (firmware BEACON_ID); "
-                         "held in place, never flown on a frontier goal")
+    ap.add_argument("--beacon", type=int, default=-1,
+                    help="board id to treat as a fixed beacon (held, not searched). "
+                         "Default -1 = none: all boards are equal searchers, "
+                         "matching firmware BEACON_ID=255. Set only for a hardware "
+                         "RF demo with a real transmitter board.")
     ap.add_argument("--dashboard", default="http://127.0.0.1:8000/ingest",
                     help="NightWing backend ingest URL (run it with KHOJ_ENGINE=hardware)")
     ap.add_argument("--no-dashboard", action="store_true",
@@ -658,7 +663,7 @@ def main():
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
-    phone = None if a.no_phone else tuple(a.phone)
+    phone = None if (a.no_phone or not a.phone) else tuple(a.phone)
     victims_xy = parse_pts(a.victims)
     decoys_xy = parse_pts(a.decoys)
 
@@ -698,14 +703,18 @@ def main():
         print("   DETECTOR   : SIM bands (%s) - no real weights in the loop"
               % (reason or "chosen"))
     print("   speed      : %.2f cells/s (firmware AGENT_SPEED=%.1f)" % (a.speed, AGENT_SPEED))
+    print("   mode       : %s" % (
+        "SEARCH + RF (closest drones converge on the phone, rest keep searching)"
+        if phone else "SEARCH-ONLY (frontier + re-observe + fusion, like the sim)"))
+    print("   beacon     : %s" % ("none - all boards search" if a.beacon < 0
+                                  else "board id %d held fixed" % a.beacon))
     print("   task band  : detections with %d < conf*100 < %d get auctioned"
           % (CONF_LO, CONF_HI))
     print("   ground truth the boards never see -")
     print("      real survivors : %s" % (victims_xy,))
     print("      decoys         : %s" % (decoys_xy,))
     if phone:
-        print("      hidden phone   : %s   (audible within %.0f cells; drones "
-              "search first, then converge on RF)"
+        print("      hidden phone   : %s   (audible within %.0f cells)"
               % (phone, a.rf_range) if a.rf_range > 0
               else "      hidden phone   : %s   (audible everywhere)" % (phone,))
 
