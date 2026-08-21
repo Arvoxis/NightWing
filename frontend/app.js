@@ -28,6 +28,7 @@ const elements = {
   openTasks: document.getElementById('openTasks'),
   wsStatus: document.getElementById('wsStatus'),
   healthStatus: document.getElementById('healthStatus'),
+  restartSearch: document.getElementById('restartSearch'),
   detailPanel: document.getElementById('detailPanel'),
   detailTitle: document.getElementById('detailTitle'),
   detailBody: document.getElementById('detailBody'),
@@ -749,6 +750,26 @@ function attachCanvasInteraction() {
 }
 
 function bindControls() {
+  elements.restartSearch.addEventListener('click', async () => {
+    if (elements.restartSearch.disabled) return;
+
+    elements.restartSearch.disabled = true;
+    elements.restartSearch.textContent = 'RESTARTING...';
+    try {
+      const response = await fetch('http://127.0.0.1:8000/restart', { method: 'POST' });
+      if (!response.ok) throw new Error(`Restart failed (${response.status})`);
+      elements.restartSearch.textContent = 'RESTART SEARCH';
+    } catch (error) {
+      console.error(error);
+      elements.restartSearch.textContent = 'RESTART FAILED';
+      setTimeout(() => {
+        elements.restartSearch.textContent = 'RESTART SEARCH';
+      }, 1800);
+    } finally {
+      elements.restartSearch.disabled = false;
+    }
+  });
+
   elements.closeDetail.addEventListener('click', () => {
     state.selectedDroneId = null;
     state.selectedSurvivorId = null;

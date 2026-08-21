@@ -16,7 +16,7 @@ Three scenarios, all on real model output:
 
 Run in the ml env (has ultralytics + torch):
     conda activate ml
-    python perception_demo.py
+    python -m scripts.perception_demo
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ import glob
 import math
 import os
 
-from perception import Perceptor, CameraModel, DronePose
-from belief import CandidateStore
+from engine.perception import Perceptor, CameraModel, DronePose
+from engine.belief import CandidateStore
 
 IMG_DIR = "SARD_YOLO.v1-original.yolov11/test/images"
 LAB_DIR = "SARD_YOLO.v1-original.yolov11/test/labels"

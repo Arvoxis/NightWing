@@ -18,8 +18,11 @@ Ctrl-C to stop.
 """
 import argparse
 import math
+import random
 import sys
 import time
+
+SENSOR_R = 3.5          # how far a drone's camera footprint reaches, in cells
 
 try:
     import serial
@@ -29,8 +32,26 @@ except ImportError:
 
 from protocol import pack_sensor, unpack_goal, frame, FrameParser, GOAL_SIZE, MSG_GOAL
 
+try:
+    import dashboard
+except ImportError:
+    dashboard = None
+
+STATE_NAMES = {0: "SEARCH", 1: "REOBSERVE", 2: "RF"}
+EVENTS = []                     # rolling log shown on the dashboard
+
 # USB-UART bridges used by ESP32 devkits. Bluetooth COM ports are ignored.
 BRIDGE_HINTS = ("CP210", "CH340", "CH910", "FTDI", "FT232", "Silicon Labs", "USB-SERIAL")
+
+
+def _pt(ev):
+    """Pull an (x, y) out of an event line like '... at (10.0,10.0)'."""
+    try:
+        inner = ev.split(" at (", 1)[1].split(")", 1)[0]
+        sx, sy = inner.split(",")
+        return [round(float(sx), 1), round(float(sy), 1)]
+    except Exception:
+        return None
 
 
 def find_ports():
@@ -76,8 +97,72 @@ class Body:
         self.ser.dtr = False
         self.ser.rts = False
         self.parser = FrameParser()
+        # The boards interleave human-readable log lines with the binary goal
+        # frames on the same wire. The frame parser discards anything that is
+        # not a frame, so we keep a separate text buffer — otherwise every EVENT
+        # the swarm reports is invisible while the feeder holds the port.
+        self.textbuf = ""
+        self.rf_est = None
+        self.last_rx = time.time()
         time.sleep(0.2)
         self.ser.reset_input_buffer()
+
+    def drain_text(self, data):
+        """Surface the board's own log lines (EVENT / PEER / RF) as they arrive.
+
+        Binary frame bytes land in here too; they are simply not printable and
+        get filtered out, so no attempt is made to separate the two streams.
+        """
+        self.textbuf += data.decode("ascii", errors="ignore")
+        while "\n" in self.textbuf:
+            line, self.textbuf = self.textbuf.split("\n", 1)
+            line = "".join(ch for ch in line if 32 <= ord(ch) < 127).strip()
+            if not line:
+                continue
+            if line.startswith(("EVENT", "PEER", "WARN", "FATAL")):
+                tag = ("id%d" % self.real_id) if self.real_id else self.port
+                txt = "[%s] %s" % (tag, line.replace("EVENT ", ""))
+                print("   " + txt)
+                EVENTS.append(txt)
+                del EVENTS[:-120]
+            # the swarm's current RF guess, for the dashboard crosshair
+            if "SOURCE EST" in line:
+                try:
+                    inner = line.split("(", 1)[1].split(")", 1)[0]
+                    ex, ey = inner.split(",")
+                    self.rf_est = (float(ex), float(ey))
+                except Exception:
+                    pass
+        if len(self.textbuf) > 4096:            # never let a stuck line grow
+            self.textbuf = self.textbuf[-512:]
+
+    def look(self, victims, decoys, rng):
+        """What my camera sees right now, if anything.
+
+        The laptop owns ground truth, so it also owns the detector. Real victims
+        come back in the UNCERTAIN band on any single look — that is the whole
+        premise: a low-threshold detector that catches half-buried people but
+        cannot tell them from a jacket on its own. Decoys come back weaker.
+        Which is which is decided by whether repeated independent looks push the
+        fused confidence up or down, and the BOARDS do that, not this file.
+        """
+        best = None
+        for (vx, vy), real in [(v, True) for v in victims] + [(d, False) for d in decoys]:
+            d = math.hypot(self.x - vx, self.y - vy)
+            if d > SENSOR_R:
+                continue
+            # Bands chosen so log-odds fusion actually RESOLVES. Verified by
+            # simulation: these give ~98% CONFIRM on victims and 100% DISMISS on
+            # decoys, both within 3 independent looks. A wider victim band
+            # centred near 0.5 contributes almost no log-odds per look and
+            # leaves everything UNRESOLVED forever — that was the first attempt.
+            if real:
+                conf = 0.55 + 0.17 * rng.random()      # 55-72%: below the 80% single-look bar
+            else:
+                conf = 0.20 + 0.16 * rng.random()      # 20-36%: above the 15% floor, clearly weak
+            if best is None or conf > best[2]:
+                best = (vx, vy, conf)
+        return best
 
     def rssi_from(self, px, py):
         """Log-distance path loss: what this drone would hear from a phone at (px,py).
@@ -90,7 +175,7 @@ class Body:
         rssi = -40.0 - 10.0 * 2.2 * math.log10(d)      # -40 dBm at 1 cell
         return int(max(-100, min(-20, round(rssi))))
 
-    def step(self, tick, speed, phone=None):
+    def step(self, tick, speed, phone=None, victims=(), decoys=(), rng=None):
         # Fly toward whatever goal the BOARD chose. That is the whole point —
         # the laptop moves the body, the board decides where the body goes.
         # Until a board says otherwise it just holds, so we add a slow drift to
@@ -107,7 +192,14 @@ class Body:
             self.y += dy / d * min(speed, d)
 
         rssi = self.rssi_from(*phone) if phone else -128
-        pkt = pack_sensor(self.agent_id, self.x, self.y, rssi=rssi, tick=tick)
+        det = self.look(victims, decoys, rng) if rng else None
+        if det:
+            pkt = pack_sensor(self.agent_id, self.x, self.y, has_detection=1,
+                              det_x=det[0], det_y=det[1],
+                              det_conf=int(round(det[2] * 100)),
+                              rssi=rssi, tick=tick)
+        else:
+            pkt = pack_sensor(self.agent_id, self.x, self.y, rssi=rssi, tick=tick)
         try:
             self.ser.write(frame(pkt))
             self.sent += 1
@@ -119,12 +211,14 @@ class Body:
         except Exception:
             data = b""
         if data:
+            self.drain_text(data)
             for payload in self.parser.feed(data):
                 if len(payload) == GOAL_SIZE and payload[0] == MSG_GOAL:
                     g = unpack_goal(payload)
                     self.goal = (g["goal_x"], g["goal_y"])
                     self.last_state = g["state"]
                     self.goals_back += 1
+                    self.last_rx = time.time()
                     if g["agent_id"]:
                         if self.real_id is None and g["agent_id"] != self.agent_id:
                             print("   %s is board id=%d (not %d) — using the board's own id"
@@ -157,14 +251,46 @@ def main():
                     help="hidden phone position (ground truth, boards never see it)")
     ap.add_argument("--no-phone", action="store_true",
                     help="send no RF readings at all (positions only)")
+    ap.add_argument("--victims", default="10,10;26,8",
+                    help="real survivors, 'x,y;x,y' — boards never see these")
+    ap.add_argument("--decoys", default="6,20;18,17",
+                    help="false alarms (hot machinery, jackets)")
+    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--no-dash", action="store_true", help="do not serve the dashboard")
     a = ap.parse_args()
     phone = None if a.no_phone else tuple(a.phone)
+
+    def parse_pts(s):
+        out = []
+        for part in s.split(";"):
+            part = part.strip()
+            if part:
+                x, y = part.split(",")
+                out.append((float(x), float(y)))
+        return out
+
+    victims = parse_pts(a.victims)
+    decoys = parse_pts(a.decoys)
+    rng = random.Random(a.seed)
 
     ports = a.ports if a.ports else find_ports()
     if not ports:
         sys.exit("No ESP32 boards found. Plug one in, or pass --ports COM3 ...")
 
-    print("Feeding %d board(s): %s   (Ctrl-C to stop)\n" % (len(ports), ", ".join(ports)))
+    print("Feeding %d board(s): %s   (Ctrl-C to stop)" % (len(ports), ", ".join(ports)))
+    print("Ground truth the boards never see —")
+    print("   real survivors : %s" % (victims,))
+    print("   decoys         : %s" % (decoys,))
+    if phone:
+        print("   hidden phone   : %s" % (phone,))
+    dash = None
+    if dashboard and not a.no_dash:
+        try:
+            dash = dashboard.start()
+            print("   DASHBOARD      : http://localhost:%d   <- open this" % dash)
+        except OSError as e:
+            print("   dashboard could not start (%s) — continuing without it" % e)
+    print()
     bodies = []
     for i, p in enumerate(ports):
         try:
@@ -180,7 +306,34 @@ def main():
         while True:
             t0 = time.time()
             for b in bodies:
-                b.step(tick, a.speed, phone)
+                b.step(tick, a.speed, phone, victims, decoys, rng)
+
+            if dash:
+                now = time.time()
+                rf = next((b.rf_est for b in bodies if b.rf_est), None)
+                confirmed, dismissed_pts = [], []
+                for e in EVENTS:
+                    if "CONFIRMED survivor at" in e or "CONFIRMED a survivor at" in e:
+                        pt = _pt(e)
+                        if pt and pt not in confirmed:
+                            confirmed.append(pt)
+                    elif "DISMISSED" in e:
+                        pt = _pt(e)
+                        if pt and pt not in dismissed_pts:
+                            dismissed_pts.append(pt)
+                dashboard.STATE.update(
+                    tick=tick, grid=int(a.grid), phone=list(phone) if phone else None,
+                    victims=[list(v) for v in victims], decoys=[list(d) for d in decoys],
+                    confirmed=confirmed, dismissed=dismissed_pts,
+                    rf=list(rf) if rf else None,
+                    nearest=(math.hypot(rf[0] - phone[0], rf[1] - phone[1])
+                             if (rf and phone) else None),
+                    events=list(EVENTS),
+                    drones=[{"id": b.real_id or 0, "x": round(b.x, 2), "y": round(b.y, 2),
+                             "goal": [round(b.goal[0], 2), round(b.goal[1], 2)],
+                             "state": STATE_NAMES.get(b.last_state, ""),
+                             "alive": (now - b.last_rx) < 2.0} for b in bodies])
+
             if tick % max(1, int(a.hz / 2)) == 0:
                 if phone:
                     # how close is the swarm getting? boards never see this line

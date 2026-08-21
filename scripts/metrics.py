@@ -27,9 +27,9 @@ FAIR-COMPARISON RULES (the important part):
     it, else FALSE. "missed" = real survivors never truly-confirmed by the budget.
 
 Usage:
-    python metrics.py                     # 12 seeds, 50s budget
-    python metrics.py --seeds 30 --budget 60
-    python metrics.py --md report.md      # also write a markdown table
+    python -m scripts.metrics                     # 12 seeds, 50s budget
+    python -m scripts.metrics --seeds 30 --budget 60
+    python -m scripts.metrics --md report.md      # also write a markdown table
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ import random
 import statistics
 from dataclasses import dataclass
 
-from world import World, WorldConfig
-from swarm import Swarm, BrainConfig
-from belief import CandidateStore
+from engine.world import World, WorldConfig
+from engine.swarm import Swarm, BrainConfig
+from engine.belief import CandidateStore
 
 MATCH_R = 2.5          # a confirmation within this of a real survivor is a true hit
 AUCTION_EVERY = 5

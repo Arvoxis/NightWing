@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from protocol import Survivor, bearing_between
+from engine.protocol import Survivor, bearing_between
 
 
 # ------------------------------------------------------------------ tunables

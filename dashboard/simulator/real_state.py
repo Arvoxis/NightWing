@@ -31,9 +31,9 @@ import math
 import time
 from collections import deque
 
-from world import World, WorldConfig
-from swarm import Swarm, BrainConfig
-from run_sim import tick_once, mission_complete
+from engine.world import World, WorldConfig
+from engine.swarm import Swarm, BrainConfig
+from engine.run_sim import tick_once, mission_complete
 
 
 def _deg(rad: float) -> float:
@@ -62,6 +62,11 @@ class RealStateGenerator:
         self._recent.clear()
         self._bids_by_task = {}
         self._hold = 0
+
+    def reset(self, seed: int | None = None):
+        """Reset the current mission while keeping the generator instance alive."""
+        self.seed = self.seed + 1 if seed is None else seed
+        self._build(self.seed)
 
     # -------------------------------------------------------------- tick
 

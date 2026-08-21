@@ -1,11 +1,17 @@
 // ============================================================================
-//  KHOJ  —  P1/P2a: the MESH  (ESP-NOW bringup + live peer table)
+//  KHOJ  —  the agent firmware (one binary runs on every board)
 //  ---------------------------------------------------------------------------
 //  WHAT THIS IS
-//  Every board broadcasts a HEARTBEAT 5x a second and listens for everyone
-//  else. That is it. No auction, no belief map, no tasks yet — this module
-//  exists to prove the radio works and to MEASURE how well, before any swarm
-//  logic is built on top of it.
+//  A complete leaderless agent. Every board broadcasts a heartbeat 5x a second,
+//  tracks who is alive, takes its position in over USB, shares radio readings,
+//  prices sightings, and independently computes who should investigate them.
+//  Nothing here is coordinated by the laptop.
+//
+//    P1  ESP-NOW mesh                    broadcast, no router, no leader
+//    P2  peer table + failure detection   2 s of silence and a peer is dead
+//    P3  position over USB, shared        every board knows where every drone is
+//    P5  cooperative RF localization      hill-climb to a transmitter nobody sees
+//    P4  sightings, bids, winner rule     the auction, on-device
 //
 //  WHY IT SENDS quorum_msg_t (not the throwaway 16-byte mesh_msg_t in
 //  docs/mesh_bringup.md): we already have a byte-verified treaty struct with a
@@ -56,23 +62,44 @@
 #define RF_SAMPLE_MS      500   // how often to share my reading
 #define RF_STALE_MS       6000  // drop a peer's sample older than this
 #define RF_MIN_SAMPLES    2     // one reading locates nothing; two start to
-// TRUE GRADIENT ASCENT — and why it is not a weighted centroid of positions.
+// HILL-CLIMB ON THE STRONGEST MEASURED SAMPLE — and why not a centroid.
 //
-// A centroid of the agents' OWN positions cannot work here, for two reasons we
-// hit in that order on hardware:
+// A signal-weighted centroid of the agents' OWN positions cannot work here, for
+// two reasons hit in this order on real hardware:
 //   1. Send everyone to it and they collapse onto one point. All samples then
-//      come from the same place, the spatial spread that carries the gradient
-//      vanishes, and the estimate freezes.
-//   2. Ring them around it instead and it is still CIRCULAR — the goals are
-//      derived from the estimate, and the estimate from the goals. Any
-//      asymmetry in the ring (four agents cannot sit symmetrically on six
-//      bearings) offsets the centroid a fixed amount per cycle and the whole
-//      thing accelerates off the map.
+//      come from the same place, the spatial spread that carries the direction
+//      information vanishes, and the estimate freezes.
+//   2. Ring them around it instead and it is still CIRCULAR — the goals derive
+//      from the estimate and the estimate from the goals. Any asymmetry in the
+//      ring (four agents cannot sit symmetrically on six bearings) offsets it a
+//      fixed amount per cycle and the whole thing accelerates off the map.
+// A least-squares gradient fit avoids the feedback but overshoots and
+// oscillates near the source.
 //
-// So: fit a plane to the SHARED (x, y, rssi) samples by least squares. Its
-// slope is the direction the signal gets stronger. Walk that way, resample,
-// refit. The direction comes from the radio, never from where we decided to
-// stand, so there is no feedback loop to run away.
+// So the guess is simply WHERE THE SIGNAL WAS LOUDEST — a measured point, which
+// nothing can feed back into. Agents move toward it, sampling fresh ground on
+// the way; any stronger reading moves it. Converges to ~0.3 cells on hardware.
+// ---- P4 (Path A): sightings, bids, and the leaderless winner rule ----------
+//  A detection whose confidence lands in the UNCERTAIN band is too strong to
+//  ignore and too weak to trust. Instead of guessing, the board broadcasts it
+//  as a task; every board prices it; every board applies the SAME rule to the
+//  SAME bids and therefore reaches the SAME winner without anyone announcing
+//  it. That last sentence is the entire novelty claim, and this block is where
+//  it stops being a slide and starts being true.
+#define MAX_TASKS         8
+#define CONF_LO           15    // <= this: too weak, ignore
+#define CONF_HI           80    // >= this: confident enough on one look
+#define TASK_TTL_MS       15000 // forget a task nobody serviced
+#define AUCTION_MS        500   // one round
+#define BID_TTL_MS        1500  // a bid older than this is stale
+#define TAU               60.0f // survival decay (s)
+#define KHOJ_EPS          0.1f
+#define T_OBS             0.5f  // time spent actually observing
+#define AGENT_SPEED       2.0f  // cells per second, matches the sim body
+#define C_FN              100.0f// a false negative costs this much more than a false positive
+#define DISMISS_R2        4.0f  // squared radius for "same place"
+#define MAX_DISMISSED     12
+
 #define RF_STEP           3.0f  // cells to advance along the gradient
 #define RF_SPREAD         2.5f  // lateral separation, keeps the fit conditioned
 #define GRID_N            32.0f // clamp goals to the world
@@ -157,6 +184,31 @@ static int8_t   realRssi = 0;
 static bool     haveRealRssi = false;
 static uint32_t lastRfTx = 0;
 
+// ---- P4 state ---------------------------------------------------------------
+struct Task {
+  bool     used;
+  uint16_t tid;
+  float    x, y;
+  float    logodds;              // fused belief this is a real survivor
+  float    bearings[4];          // viewing angles already used, degrees
+  uint8_t  nbear;
+  uint32_t ms;                   // when we last heard about it
+  float    bid[KHOJ_MAX_PEERS];  // what each agent said it was worth to them
+  uint32_t bidMs[KHOJ_MAX_PEERS];
+};
+static Task tasks[MAX_TASKS];
+static uint16_t nextTid = 1;
+static uint32_t lastAuction = 0;
+static uint16_t myTask = 0;      // the task I am currently servicing, 0 = none
+static float myTaskX = 0, myTaskY = 0;
+
+// Spots the swarm has finished with — BOTH dismissed decoys and confirmed
+// survivors. Confirmations must be remembered too: a found survivor is still
+// visible to the next drone that flies over, and without this the swarm
+// re-announces the same person forever and drowns in duplicate tasks.
+struct Resolved { bool used; float x, y; bool confirmed; };
+static Resolved resolved[MAX_DISMISSED];
+
 struct RfSample {
   bool     used;
   float    x, y;
@@ -174,6 +226,76 @@ static void rfStore(uint8_t agent, float x, float y, int8_t rssi, uint32_t now) 
   rf[agent].used = true;
   rf[agent].x = x; rf[agent].y = y;
   rf[agent].rssi = rssi; rf[agent].ms = now;
+}
+
+// ---- P4 maths: ported straight from sim/swarm.py ----------------------------
+static inline float clamp01(float p) { return p < 1e-6f ? 1e-6f : (p > 0.999999f ? 0.999999f : p); }
+static inline float logitf(float p)  { p = clamp01(p); return logf(p / (1.0f - p)); }
+static inline float sigmoidf(float x){ if (x > 40) x = 40; if (x < -40) x = -40;
+                                       return 1.0f / (1.0f + expf(-x)); }
+static float binEntropy(float p) {     // uncertainty: 1 bit at p=0.5, 0 at the ends
+  p = clamp01(p);
+  return -(p * log2f(p) + (1.0f - p) * log2f(1.0f - p));
+}
+static float angDiff(float a, float b) {
+  float d = fmodf(a - b + 180.0f, 360.0f);
+  if (d < 0) d += 360.0f;
+  return fabsf(d - 180.0f);
+}
+
+static Task *findTaskNear(float x, float y) {
+  for (uint8_t i = 0; i < MAX_TASKS; i++)
+    if (tasks[i].used) {
+      float dx = tasks[i].x - x, dy = tasks[i].y - y;
+      if (dx * dx + dy * dy < DISMISS_R2) return &tasks[i];
+    }
+  return nullptr;
+}
+static Task *findTaskById(uint16_t tid) {
+  for (uint8_t i = 0; i < MAX_TASKS; i++)
+    if (tasks[i].used && tasks[i].tid == tid) return &tasks[i];
+  return nullptr;
+}
+static Task *newTask(uint32_t now) {
+  for (uint8_t i = 0; i < MAX_TASKS; i++)
+    if (!tasks[i].used) { memset(&tasks[i], 0, sizeof(Task)); tasks[i].used = true;
+                          tasks[i].ms = now; return &tasks[i]; }
+  return nullptr;
+}
+static bool isResolved(float x, float y) {
+  for (uint8_t i = 0; i < MAX_DISMISSED; i++)
+    if (resolved[i].used) {
+      float dx = resolved[i].x - x, dy = resolved[i].y - y;
+      if (dx * dx + dy * dy < DISMISS_R2) return true;
+    }
+  return false;
+}
+static void addResolved(float x, float y, bool confirmed) {
+  if (isResolved(x, y)) return;
+  for (uint8_t i = 0; i < MAX_DISMISSED; i++)
+    if (!resolved[i].used) { resolved[i].used = true; resolved[i].x = x;
+                             resolved[i].y = y; resolved[i].confirmed = confirmed;
+                             return; }
+}
+
+// THE BID — expected survivors per second. Identical to swarm.py's bid().
+//   U      how much uncertainty this second look would remove
+//   c      how long it takes ME to get there — cost is TIME, not distance
+//   decay  evaluated at ARRIVAL, so a task I would reach late is worth less
+static float bidFor(const Task *t, float ax, float ay, float tnow) {
+  float dx = t->x - ax, dy = t->y - ay;
+  float c = sqrtf(dx * dx + dy * dy) / AGENT_SPEED + T_OBS;
+  float p = sigmoidf(t->logodds);
+  // viewpoint diversity: a second look from the SAME bearing tells us nothing
+  float bear = atan2f(ay - t->y, ax - t->x) * 57.29578f;
+  float dth = 180.0f;
+  for (uint8_t i = 0; i < t->nbear; i++) {
+    float d = angDiff(bear, t->bearings[i]);
+    if (d < dth) dth = d;
+  }
+  float div = 1.0f - expf(-dth / 60.0f);
+  float U = binEntropy(p) * C_FN * div;
+  return U * expf(-(tnow + c) / TAU) / (c + KHOJ_EPS);
 }
 
 static int8_t rfBestRssi = -128;       // strongest reading anyone has taken
@@ -335,6 +457,139 @@ static void printStats() {
   } else {
     Serial.printf("  RF  no fix yet (%u/%u samples)\n", rfCount, RF_MIN_SAMPLES);
   }
+}
+
+// ---- P4: broadcasting ------------------------------------------------------
+static void meshSend(uint8_t type, uint16_t tid, float value, float x, float y) {
+  quorum_msg_t m = {};
+  m.msg_type  = type;
+  m.agent_id  = myId;
+  m.task_id   = tid;
+  m.value     = value;
+  m.x         = x;
+  m.y         = y;
+  m.timestamp = millis();
+  m.seq       = txSeq++;
+  esp_now_send(BROADCAST, (uint8_t *)&m, sizeof(m));
+}
+
+// MSG_AWARD carries the RESOLUTION of a task: value 1 = confirmed survivor,
+// value 0 = dismissed. A dismissal is the Hive-Mind broadcast — every board
+// records the spot and no agent ever investigates it again.
+static void resolveTask(Task *t, bool confirmed) {
+  meshSend(MSG_AWARD, t->tid, confirmed ? 1.0f : 0.0f, t->x, t->y);
+  Serial.printf("EVENT %s at (%.1f,%.1f)  task=%u\n",
+                confirmed ? "CONFIRMED survivor" : "DISMISSED (broadcast to swarm)",
+                t->x, t->y, t->tid);
+  addResolved(t->x, t->y, confirmed);
+  if (myTask == t->tid) myTask = 0;
+  t->used = false;
+}
+
+// ---- P4: a sighting arrives from my own camera ------------------------------
+static void handleDetection(float dx, float dy, uint8_t conf, uint32_t now) {
+  if (isResolved(dx, dy)) return;   // swarm already settled this spot
+  // the bearing FROM the thing TO me — the angle I viewed it from
+  float bear = atan2f(myY - dy, myX - dx) * 57.29578f;
+  Task *t = findTaskNear(dx, dy);
+
+  if (conf >= CONF_HI) {                    // confident on a single look
+    if (t) resolveTask(t, true);
+    else { Serial.printf("EVENT CONFIRMED survivor at (%.1f,%.1f) (single look %u%%)\n",
+                         dx, dy, conf); }
+    return;
+  }
+  if (conf <= CONF_LO) return;              // too weak to spend a drone on
+
+  if (!t) {                                 // first uncertain sighting here
+    t = newTask(now);
+    if (!t) return;
+    t->tid = (uint16_t)((myId << 12) | (nextTid++ & 0x0FFF));
+    t->x = dx; t->y = dy;
+    t->logodds = logitf(conf / 100.0f);
+    t->bearings[0] = bear; t->nbear = 1;
+    Serial.printf("EVENT SIGHTING %u%% at (%.1f,%.1f) -> REOBSERVE task %u announced\n",
+                  conf, dx, dy, t->tid);
+    meshSend(MSG_TASK_SPAWN, t->tid, t->logodds, dx, dy);
+    return;
+  }
+
+  // Only fuse genuinely NEW viewpoints. Two looks from the same angle are not
+  // independent evidence, and treating them as if they were would let the swarm
+  // talk itself into a confident wrong answer.
+  for (uint8_t i = 0; i < t->nbear; i++)
+    if (angDiff(bear, t->bearings[i]) <= 20.0f) return;
+
+  t->logodds += logitf(conf / 100.0f);
+  if (t->nbear < 4) t->bearings[t->nbear++] = bear;
+  t->ms = now;
+  float fused = sigmoidf(t->logodds);
+  Serial.printf("EVENT SECOND LOOK %u%% from a new angle -> fused %.2f\n", conf, fused);
+  if (fused >= 0.80f)      resolveTask(t, true);
+  else if (fused <= 0.15f) resolveTask(t, false);
+}
+
+// ---- P4: one auction round --------------------------------------------------
+//  Runs on EVERY board, every AUCTION_MS, on that board's own copy of the task
+//  and bid tables. No board is asked and no board announces — they simply all
+//  apply the same rule to the same numbers.
+static void runAuction(uint32_t now) {
+  float tnow = now / 1000.0f;
+
+  for (uint8_t i = 0; i < MAX_TASKS; i++)          // forget stale tasks
+    if (tasks[i].used && now - tasks[i].ms > TASK_TTL_MS) {
+      if (myTask == tasks[i].tid) myTask = 0;
+      tasks[i].used = false;
+    }
+
+  for (uint8_t i = 0; i < MAX_TASKS; i++) {        // price every open task
+    if (!tasks[i].used) continue;
+    float b = bidFor(&tasks[i], myX, myY, tnow);
+    tasks[i].bid[myId % KHOJ_MAX_PEERS] = b;
+    tasks[i].bidMs[myId % KHOJ_MAX_PEERS] = now;
+    meshSend(MSG_BID, tasks[i].tid, b, myX, myY);
+  }
+
+  // Sequential greedy: the most valuable task claims its best free agent first.
+  bool taken[KHOJ_MAX_PEERS] = {false};
+  bool handled[MAX_TASKS] = {false};
+  uint16_t won = 0;
+  myTaskX = myX; myTaskY = myY;
+
+  for (uint8_t pass = 0; pass < MAX_TASKS; pass++) {
+    int best = -1;
+    float bestVal = 0;
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (!tasks[i].used || handled[i]) continue;
+      float mx = 0;
+      for (uint8_t a = 0; a < KHOJ_MAX_PEERS; a++)
+        if (now - tasks[i].bidMs[a] < BID_TTL_MS && tasks[i].bid[a] > mx) mx = tasks[i].bid[a];
+      if (mx > bestVal) { bestVal = mx; best = i; }
+    }
+    if (best < 0) break;
+    handled[best] = true;
+    Task *t = &tasks[best];
+
+    // THE RULE: highest bid wins; ties go to the lowest agent id. Every board
+    // runs exactly this, on the same bids, and so reaches the same winner.
+    int winner = -1;
+    float wb = 0;
+    for (uint8_t a = 0; a < KHOJ_MAX_PEERS; a++) {
+      if (taken[a]) continue;
+      if (now - t->bidMs[a] >= BID_TTL_MS) continue;
+      if (t->bid[a] > wb + 1e-9f) { wb = t->bid[a]; winner = a; }
+    }
+    if (winner < 0) continue;
+    taken[winner] = true;
+    if ((uint8_t)winner == (myId % KHOJ_MAX_PEERS)) {
+      won = t->tid;
+      myTaskX = t->x;
+      myTaskY = t->y;
+    }
+  }
+  if (won != myTask && won)
+    Serial.printf("EVENT I WON task %u -> flying to (%.1f,%.1f)\n", won, myTaskX, myTaskY);
+  myTask = won;
 }
 
 // ---- roster -----------------------------------------------------------------
@@ -500,6 +755,12 @@ void loop() {
     rfEstimate(now);
   }
 
+  // ---- P4: run an auction round -------------------------------------------
+  if (myId != BEACON_ID && now - lastAuction >= AUCTION_MS) {
+    lastAuction = now;
+    runAuction(now);
+  }
+
   // ---- drain what the radio heard -----------------------------------------
   while (rxTail != rxHead) {
     RxItem it = rxRing[rxTail];
@@ -564,6 +825,44 @@ void loop() {
     if (it.m.msg_type == MSG_RF_SAMPLE)
       rfStore(it.m.agent_id, it.m.x, it.m.y, it.m.rssi, now);
 
+    // ---- P4: the swarm arguing about a sighting ---------------------------
+    if (it.m.msg_type == MSG_TASK_SPAWN) {
+      if (!isResolved(it.m.x, it.m.y) && !findTaskById(it.m.task_id)) {
+        Task *t = findTaskNear(it.m.x, it.m.y);
+        if (!t) t = newTask(now);
+        if (t) {
+          t->tid = it.m.task_id;
+          t->x = it.m.x; t->y = it.m.y;
+          t->logodds = it.m.value;
+          t->nbear = 0;
+          t->ms = now;
+          Serial.printf("EVENT peer %u announced task %u at (%.1f,%.1f)\n",
+                        it.m.agent_id, it.m.task_id, it.m.x, it.m.y);
+        }
+      }
+    } else if (it.m.msg_type == MSG_BID) {
+      Task *t = findTaskById(it.m.task_id);
+      if (t) {
+        uint8_t a = it.m.agent_id % KHOJ_MAX_PEERS;
+        t->bid[a] = it.m.value;
+        t->bidMs[a] = now;
+        t->ms = now;
+      }
+    } else if (it.m.msg_type == MSG_AWARD) {
+      // a task was resolved somewhere in the swarm
+      Task *t = findTaskById(it.m.task_id);
+      if (it.m.value < 0.5f) {
+        addResolved(it.m.x, it.m.y, false);  // Hive-Mind: never look here again
+        Serial.printf("EVENT peer %u DISMISSED (%.1f,%.1f) — noted, will not re-check\n",
+                      it.m.agent_id, it.m.x, it.m.y);
+      } else {
+        addResolved(it.m.x, it.m.y, true);   // found — stop re-announcing them
+        Serial.printf("EVENT peer %u CONFIRMED a survivor at (%.1f,%.1f)\n",
+                      it.m.agent_id, it.m.x, it.m.y);
+      }
+      if (t) { if (myTask == t->tid) myTask = 0; t->used = false; }
+    }
+
 #if VERBOSE_RX
     Serial.printf("RX from=%u type=0x%02X seq=%u tx_ms=%lu rssi=%d\n",
                   it.m.agent_id, it.m.msg_type, it.m.seq,
@@ -587,13 +886,24 @@ void loop() {
 
       simRssi = s.rssi;         // laptop-computed RF reading, if it sent one
 
+      // P4: my camera saw something. Decide what it is worth telling the swarm.
+      if (s.has_detection && myId != BEACON_ID)
+        handleDetection(s.det_x, s.det_y, s.det_conf, now);
+
       usb_goal_t g = {};
       g.msg_type = MSG_GOAL;
       g.agent_id = myId;
       // THE DECISION. Once the swarm has pooled enough readings to place the
       // source, fly at it; otherwise hold. This is the whole cooperative
       // gradient: move toward the estimate, resample there, re-estimate.
-      if (rfLocked && myId != BEACON_ID) {
+      // Priority: a task I won in the auction beats routine RF sweeping —
+      // an uncertain sighting is time-critical in a way the gradient is not.
+      if (myTask && myId != BEACON_ID) {
+        g.goal_x = myTaskX;
+        g.goal_y = myTaskY;
+        g.state  = STATE_REOBSERVE;
+        g.cur_task = myTask;
+      } else if (rfLocked && myId != BEACON_ID) {
         float gx2, gy2;
         float dx = rfEstX - myX, dy = rfEstY - myY;
         float d = sqrtf(dx * dx + dy * dy);

@@ -28,7 +28,7 @@ import math
 import os
 from dataclasses import dataclass
 
-from protocol import Detection, bearing_between
+from engine.protocol import Detection, bearing_between
 
 
 # ------------------------------------------------------------------ model path

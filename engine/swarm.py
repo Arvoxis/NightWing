@@ -21,11 +21,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from protocol import (
+from engine.protocol import (
     Task, TaskType, Bid, AgentSnapshot, AgentState,
     bearing_between, angular_diff,
 )
-from belief import CandidateStore, binary_entropy
+from engine.belief import CandidateStore, binary_entropy
 
 
 # ------------------------------------------------------------------ config

@@ -1,0 +1,287 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>KHOJ — Demo Flow Options</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; color:#1B2A3A;
+         font-size: 10.5pt; line-height: 1.5; margin:0; }
+  h1 { font-size: 24pt; color:#2E3192; margin:0 0 2mm 0; letter-spacing:-0.3pt; }
+  h2 { font-size: 15pt; color:#2E3192; margin:9mm 0 2mm 0;
+       border-bottom:1.5pt solid #2E3192; padding-bottom:1.5mm; }
+  h3 { font-size: 12pt; color:#0E8FA0; margin:5mm 0 1.5mm 0; }
+  h4 { font-size: 10.5pt; color:#1B2A3A; margin:3.5mm 0 1mm 0; }
+  p  { margin:0 0 2.5mm 0; }
+  .sub { font-size: 11.5pt; color:#5A6B7C; font-style:italic; margin-bottom:5mm; }
+  ul, ol { margin:0 0 2.5mm 0; padding-left: 6mm; }
+  li { margin-bottom: 1.2mm; }
+  table { width:100%; border-collapse:collapse; margin:2mm 0 4mm 0; font-size:9.5pt; }
+  th { background:#EDEFF7; color:#2E3192; text-align:left; padding:1.8mm 2.5mm;
+       border:0.5pt solid #C9CEE6; font-weight:bold; }
+  td { padding:1.8mm 2.5mm; border:0.5pt solid #D7DEE5; vertical-align:top; }
+  .flow { background:#F4F7FA; border:0.75pt solid #C6D2DD; border-radius:2mm;
+          padding:3mm 4mm; margin:2.5mm 0 4mm 0; font-family:Consolas,monospace;
+          font-size:8.5pt; line-height:1.45; white-space:pre; overflow:hidden; }
+  .card { border:0.75pt solid #C6D2DD; border-left:3pt solid #0E8FA0;
+          border-radius:1.5mm; padding:3mm 4mm; margin:2.5mm 0 4mm 0; background:#FBFCFD; }
+  .card.pick { border-left-color:#2E7D5B; background:#F2F9F5; }
+  .card.warn { border-left-color:#D98829; background:#FDF7EF; }
+  .tag { display:inline-block; font-size:8pt; font-weight:bold; padding:0.6mm 2mm;
+         border-radius:1mm; margin-right:2mm; vertical-align:1px; }
+  .t-yes { background:#DCEDE5; color:#2E7D5B; }
+  .t-new { background:#FBEEDA; color:#A8681B; }
+  .t-pick{ background:#2E7D5B; color:#fff; }
+  .kpi { display:flex; gap:3mm; margin:3mm 0 5mm 0; }
+  .kpi div { flex:1; border:0.75pt solid #C6D2DD; border-radius:1.5mm;
+             padding:2.5mm; text-align:center; background:#FBFCFD; }
+  .kpi b { display:block; font-size:16pt; color:#0E8FA0; line-height:1.2; }
+  .kpi span { font-size:8pt; color:#5A6B7C; }
+  .note { font-size:9pt; color:#5A6B7C; }
+  .pb { page-break-before: always; }
+  .avoid { page-break-inside: avoid; }
+  code { font-family:Consolas,monospace; font-size:9pt; background:#EEF3F7;
+         padding:0.3mm 1mm; border-radius:0.8mm; }
+</style></head><body>
+
+<h1>KHOJ — Demo Flow Options</h1>
+<p class="sub">What we have built, four ways we could demo it, and what the team needs to decide.</p>
+
+<p><b>KHOJ is a leaderless drone swarm that finds people cameras cannot see.</b> Several
+agents share phone signal-strength readings over their own radio mesh and cooperatively
+locate a transmitter none of them can see. Any agent can die at any moment and the rest
+carry on — there is no leader and no central computer.</p>
+
+<p class="note">This document is self-contained. If a term is unfamiliar, the glossary on
+the last page defines every one used here.</p>
+
+<h2>1. Where the project actually stands</h2>
+
+<p>All of the following is running on <b>five real ESP32 boards</b>, measured on the bench —
+not simulated, not estimated.</p>
+
+<div class="kpi">
+  <div><b>0.0%</b><span>mesh packet loss<br>across 5 boards</span></div>
+  <div><b>&lt; 2 s</b><span>to detect a dead board,<br>independently on each</span></div>
+  <div><b>0.3</b><span>grid cells — RF localization<br>accuracy achieved</span></div>
+  <div><b>4–5 / 5</b><span>survivors found in sim<br>vs 3–4 for the baseline</span></div>
+</div>
+
+<table>
+<tr><th style="width:32%">Capability</th><th style="width:14%">Status</th><th>What it means</th></tr>
+<tr><td>ESP-NOW mesh</td><td><span class="tag t-yes">WORKING</span></td>
+    <td>5 boards broadcasting 23-byte packets at 5 Hz. No router, no pairing, no internet.</td></tr>
+<tr><td>Failure detection</td><td><span class="tag t-yes">WORKING</span></td>
+    <td>2 s of silence and every surviving board independently marks that board dead. Nobody announces it.</td></tr>
+<tr><td>Shared positions</td><td><span class="tag t-yes">WORKING</span></td>
+    <td>Each board takes its position over USB and shares it on the mesh, so every board knows where every drone is.</td></tr>
+<tr><td>Cooperative RF localization</td><td><span class="tag t-yes">WORKING</span></td>
+    <td>Agents share signal readings and converge on a hidden transmitter to 0.3 cells.</td></tr>
+<tr><td>Belief map, auction,<br>re-observation, Hive-Mind</td><td><span class="tag t-new">PYTHON ONLY</span></td>
+    <td><b>Exists, but only on the laptop.</b> Not yet running on the boards. This is the gap the demo choice hinges on.</td></tr>
+</table>
+
+<h3>The one gap that matters</h3>
+<div class="card warn">
+<p style="margin-bottom:1.5mm"><b>The boards cannot yet handle a sighting.</b> If a camera says
+“I think that is a person, 41% confident”, the boards have no logic for it. Deciding who
+investigates a sighting currently happens in Python on the laptop.</p>
+<p style="margin:0"><b>Path A</b> = port that logic to the boards (~250 lines of C: a task list,
+announcing, bidding, and the shared winner rule). <b>Path B</b> = leave it on the laptop.
+Both are honest; Path A makes the “the drones decide, not the laptop” claim literally true.
+<b>We are attempting Path A.</b></p>
+</div>
+
+<h2 class="pb">2. How the system fits together</h2>
+
+<div class="flow">   THE WORLD (laptop, or Jetson for a real camera)
+   physics · terrain · where victims really are · the hidden phone
+   It simulates and draws. It NEVER decides where a drone goes.
+        |
+        |  USB, private to each agent
+        |  DOWN: usb_sensor_t  (my position, what my camera saw, my signal reading)
+        |  UP:   usb_goal_t    (this is where I have decided to go)
+        v
+   +--------+  +--------+  +--------+  +--------+  +--------+
+   | ESP32  |  | ESP32  |  | ESP32  |  | ESP32  |  | ESP32  |
+   |   1    |  |   2    |  |   3    |  |   4    |  | BEACON |
+   +--------+  +--------+  +--------+  +--------+  +--------+
+        |___________|___________|___________|___________|
+                          ESP-NOW radio mesh
+        heartbeats · sightings · bids · RF samples · dismissals
+        No router. No leader. Every board hears every other board.</div>
+
+<p><b>The key idea:</b> the laptop owns <i>reality</i>; the boards own the <i>decisions</i>.
+Each board holds its own private belief about where survivors are, built only from what it
+personally sensed plus what peers broadcast. No board can read another’s mind. That
+separation is the whole reason this is a swarm and not a puppet show.</p>
+
+<h3>How five boards agree without a leader</h3>
+<ol>
+<li>A board sees something uncertain and <b>broadcasts</b> it as a task.</li>
+<li>Every board computes <b>its own bid</b>: how much value can I deliver per second if I go?</li>
+<li>Every board <b>broadcasts its bid</b>. Now all boards hold identical data.</li>
+<li>Every board runs the <b>same rule</b> — highest bid wins, ties go to the lowest ID.</li>
+</ol>
+<p>Same data plus same rule equals the same winner, computed five times independently.
+<b>Nobody announces the result and there is no referee to kill.</b> That is why pulling a
+board’s power changes nothing about how the rest decide.</p>
+
+<h3>The bid — one formula for every kind of task</h3>
+<div class="flow">   bid  =  U(task)  ×  exp( −(t_now + c) / τ )  /  (c + ε)
+
+   c   = how long it takes ME to get there   (TIME, not distance)
+   τ   = 60 s survival decay, evaluated at ARRIVAL time
+   U   = the value of the task</div>
+<p>Dividing by time makes the bid <b>expected survivors per second</b>, so the swarm always
+takes the most useful action per second. Evaluating the decay at arrival means a survivor
+you would reach late is worth less — it prices <b>urgency</b>, not just distance.</p>
+
+<h2 class="pb">3. The four demo options</h2>
+
+<p>All four use the same boards and the same firmware. They differ in what the judge sees
+and how much new work each needs.</p>
+
+<h3>Option 1 — Jetson as one agent’s real eyes</h3>
+<div class="card">
+<h4>What the judge sees</h4>
+<p>A camera watches a scene. A person is partly hidden. YOLO returns a real, unconvincing
+number — 0.41. The swarm decides that is worth a second look, picks who goes, the camera
+moves to a new angle, and the two independent looks combine into a confident CONFIRMED.</p>
+
+<h4>Physical setup</h4>
+<p>Jetson + camera on a tripod. One ESP32 plugged into the Jetson. The other four boards
+on the laptop. All five on the mesh.</p>
+
+<h4>Exact flow, per frame</h4>
+<ol>
+<li>Jetson captures a frame; YOLO returns <code>(class, box, confidence)</code>.</li>
+<li>Bridge script picks the best <code>person</code> box → confidence 0.41.</li>
+<li>Bridge converts the box centre from pixels to a grid cell, e.g. (12.4, 7.1).</li>
+<li>Bridge sends <code>usb_sensor_t</code> to its ESP32 with <code>has_detection=1, det_conf=41</code>.</li>
+<li>That board sees 41 is in the uncertain band (15–80) and <b>broadcasts a REOBSERVE task</b>.</li>
+<li>All boards bid; all boards independently pick the same winner.</li>
+<li>Winner replies <code>usb_goal_t</code> with the task position and state REOBSERVE.</li>
+<li>It approaches from a <b>different angle</b> and looks again → 0.63.</li>
+<li>The two looks fuse mathematically → 0.87 → <b>CONFIRMED</b>.</li>
+<li>Had it fused below 0.15 → <b>DISMISSED</b>, broadcast to all boards, never re-checked.</li>
+</ol>
+<p style="margin-bottom:0"><b>Needs:</b> the Jetson bridge (new) + Path A. <b>Weakness:</b> only one
+agent has real perception; the other four are simulated.</p>
+</div>
+
+<h3>Option 2 — The tabletop disaster site <span class="tag t-pick">RECOMMENDED</span></h3>
+<div class="card pick">
+<h4>What the judge sees</h4>
+<p>A table laid out as a miniature disaster site — rubble props, a jacket, a hot laptop, a
+doll. A camera looks straight down at it. On screen, five drones sweep across that real
+scene and pick out what is on the table.</p>
+
+<h4>The idea</h4>
+<p>The table <b>is</b> the 32×32 search grid. Each agent’s position maps to a rectangle of
+the camera image. When agent 3 is at cell (12, 7), the Jetson <b>crops that rectangle</b> and
+runs YOLO on just that crop. <b>All five agents get real detections, from their own
+footprints, out of a single camera.</b></p>
+
+<h4>Exact flow, per frame</h4>
+<ol>
+<li>One frame captured of the whole table.</li>
+<li>For each agent: take its current position, convert to a pixel rectangle, crop.</li>
+<li>Run YOLO on each crop → a separate confidence per agent.</li>
+<li>Send <b>each agent its own private</b> <code>usb_sensor_t</code> with its own detection.</li>
+<li>From here identical to Option 1, steps 5–10.</li>
+</ol>
+<p style="margin-bottom:0"><b>Why this is the pick:</b> every agent really perceives, the swarm
+sweeps a physical scene, and “each agent sees only its own footprint” becomes literally
+visible. A judge can move an object mid-demo and watch the swarm react.
+<b>Needs:</b> Option 1’s bridge plus a crop loop and one calibration number (pixels per cell).</p>
+</div>
+
+<h3 class="pb">Option 3 — The two-victim tableau</h3>
+<div class="card pick">
+<h4>What the judge sees</h4>
+<p>Two victims on the table. <b>Victim A</b> is partly visible under a cloth — the camera can
+just about find it. <b>Victim B</b> is sealed inside a cardboard box — <b>no camera can ever see
+it</b> — with the beacon board inside.</p>
+<p>The swarm finds A with the camera and B by radio. Then the judge lifts the box.</p>
+
+<h4>Exact flow</h4>
+<ol>
+<li>Swarm sweeps the table exactly as in Option 2.</li>
+<li>Victim A → 0.41 → second look → 0.87 → <b>CONFIRMED by camera</b>.</li>
+<li>Meanwhile agents share <code>RF_SAMPLE</code> readings and hill-climb toward the box.</li>
+<li>They converge on it → <b>CONFIRMED by radio, never seen</b>.</li>
+<li>The hot laptop reads 0.34, gets dismissed, and no agent re-checks it.</li>
+<li><b>Judge lifts the box.</b> The beacon is inside.</li>
+</ol>
+<p style="margin-bottom:0"><b>The line to say:</b> <i>“A camera-only swarm finds one of these two.
+Ours finds both — and the one it cannot see is the one that was buried.”</i>
+This is the entire pitch as a physical object. <b>Needs:</b> Option 2 plus a box. Do both.</p>
+</div>
+
+<h3>Option 4 — The threshold trap, live</h3>
+<div class="card">
+<h4>What the judge sees</h4>
+<p>Two counters on the dashboard, updating live during the run:</p>
+<div class="flow">   SINGLE-PASS  (what a normal system reports):  4 alarms → 1 real, 3 false
+   KHOJ         (with re-observation):            1 confirmed, 3 dismissed</div>
+<p style="margin-bottom:0">Same detections, same run. The only difference is whether marginal
+sightings get a second look. It turns our strongest argument — <b>a false positive costs a
+rescue team three minutes, a false negative costs a life</b> — into a number on screen instead
+of a claim. <b>Needs:</b> ~30 minutes of dashboard work. It is only counting.</p>
+</div>
+
+<h2>4. Recommendation</h2>
+<p><b>Build Options 2 + 3 + 4 as one setup.</b> A single tabletop scene, a camera above it, a
+hidden beacon in a box, and live counters. That one arrangement delivers camera detection,
+re-observation, Hive-Mind dismissal, the RF hero moment, and the false-alarm argument — all
+on real hardware a judge can reach out and touch.</p>
+
+<h3>Why not fly a drone</h3>
+<div class="card warn">
+<p style="margin:0">A drone flying a pattern shows <b>motion</b>. The tabletop shows <b>the swarm
+thinking</b>, which is the thing no other team will have. Building an autonomous flight in the
+time we have is the classic scope trap, and one real drone beside four simulated ones reads
+as a prop rather than a swarm. If someone can fly it <b>independently</b>, record 30 seconds of
+outdoor footage for the pitch video — it never touches the live demo.</p>
+</div>
+
+<h3>Three beats, all participatory</h3>
+<ol>
+<li><b>The judge hides the beacon</b> → four agents converge on something invisible.</li>
+<li><b>The judge pulls a board’s power</b> → the others notice in 2 s and absorb its work, with nobody in charge.</li>
+<li><b>The judge stands in front of the camera, partly hidden</b> → 0.41 → second angle → CONFIRMED.</li>
+</ol>
+<p>People remember what they <i>did</i>, not what they watched.</p>
+
+<h2>5. What the team needs to decide</h2>
+<table>
+<tr><th style="width:36%">Decision</th><th>Options</th></tr>
+<tr><td>Which demo flow</td><td>Recommendation: Options 2 + 3 + 4 combined as one tabletop setup.</td></tr>
+<tr><td>Who builds the physical scene</td><td>Table, props, camera mount, and calibrating pixels→grid cells.</td></tr>
+<tr><td>Who sets up the Jetson</td><td>OS, camera, YOLO printing live detections. Blocks the bridge.</td></tr>
+<tr><td>Drone: yes or no</td><td>Only as pre-recorded footage, and only if someone is free. Never live.</td></tr>
+<tr><td>Feature freeze time</td><td>Proposed: stop adding features with 3 hours left. Rehearse ≥5 full runs and record a backup video.</td></tr>
+</table>
+
+<h2 class="pb">6. Glossary</h2>
+<table>
+<tr><th style="width:26%">Term</th><th>Meaning</th></tr>
+<tr><td>ESP-NOW</td><td>Espressif’s radio protocol. Boards broadcast directly to each other — no WiFi router, no pairing, no internet.</td></tr>
+<tr><td>Agent</td><td>One drone’s brain — one ESP32 board.</td></tr>
+<tr><td>Belief map</td><td>A 32×32 grid inside each board holding how likely each cell still hides an unfound victim. <b>Private to that board.</b></td></tr>
+<tr><td>Auction</td><td>How the swarm splits work. Everyone bids, everyone applies the same rule, everyone gets the same winner — no leader.</td></tr>
+<tr><td>Bid</td><td>A number meaning “expected survivors per second if I take this task”.</td></tr>
+<tr><td>REOBSERVE</td><td>A task created when a sighting is too uncertain to trust — someone must look again from a different angle.</td></tr>
+<tr><td>Log-odds fusion</td><td>The maths that combines two independent looks into one confidence. Only fuses views more than 20° apart, so the looks stay independent.</td></tr>
+<tr><td>Hive-Mind</td><td>When the swarm rules something out, it broadcasts that, and no agent ever re-investigates it. <i>“The individual forgets; the swarm remembers.”</i></td></tr>
+<tr><td>RSSI</td><td>Received signal strength, in dBm. Closer to the transmitter = less negative. −30 is strong, −80 is weak.</td></tr>
+<tr><td>RF_SAMPLE</td><td>A broadcast saying “at position (x, y) I measured this signal strength”. Pooling these is how the swarm locates a hidden phone.</td></tr>
+<tr><td>Gradient-seeking</td><td>Moving toward a stronger signal rather than calculating distance. Needs no calibration, so it survives concrete and interference.</td></tr>
+<tr><td>Beacon</td><td>The board playing the victim’s phone. It only transmits; it never searches.</td></tr>
+<tr><td>Hardware-in-the-loop</td><td>Real decision-making hardware driven by a simulated world. Standard practice — PX4 ships a mode for it.</td></tr>
+<tr><td>Path A / Path B</td><td>Whether the sighting-and-bidding logic runs on the boards (A) or on the laptop (B).</td></tr>
+</table>
+
+<p class="note" style="margin-top:8mm">Full technical detail is in <code>HANDOFF.md</code> and
+<code>README.md</code> in the repository.</p>
+
+</body></html>

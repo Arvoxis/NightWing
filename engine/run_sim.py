@@ -7,18 +7,18 @@ from a terminal. This is also the harness the dashboard and metrics hook into
 later (via build_state / run_headless).
 
 Usage:
-    python run_sim.py                 # live-ish text view
-    python run_sim.py --ticks 400     # run N ticks
-    python run_sim.py --quiet         # no per-tick printing, just the summary
+    python -m engine.run_sim                 # live-ish text view
+    python -m engine.run_sim --ticks 400     # run N ticks
+    python -m engine.run_sim --quiet         # no per-tick printing, just the summary
 """
 
 from __future__ import annotations
 
 import argparse
 
-from world import World, WorldConfig
-from swarm import Swarm, BrainConfig
-from protocol import SimState
+from engine.world import World, WorldConfig
+from engine.swarm import Swarm, BrainConfig
+from engine.protocol import SimState
 
 
 AUCTION_EVERY = 5   # rebuild frontiers + run auction every N ticks (~0.5s)
