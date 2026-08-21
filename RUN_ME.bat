@@ -11,7 +11,7 @@ echo.
 
 set PORTS=COM3 COM13 COM15 COM16
 set N_VICTIMS=3
-set N_DECOYS=2
+set N_DECOYS=0
 set SPEED=2
 
 cd /d "%~dp0"

@@ -206,6 +206,8 @@ html, body {
 .sw-confirm  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
 .sw-rf       { background: var(--purple); box-shadow: 0 0 6px var(--purple); border-radius: 0; width: 10px; height: 2px; margin: 4px 0; }
 .sw-coverage { background: rgba(0,212,255,0.25); border: 1px solid rgba(0,212,255,0.4); border-radius: 2px; }
+.sw-mesh     { background: transparent; border-top: 1.5px dotted var(--cyan); width: 12px; height: 0; border-radius: 0; margin: 5px 0; }
+.sw-reobs    { background: var(--yellow, #b89030); box-shadow: 0 0 6px var(--yellow, #b89030); }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
 .sidebar {
@@ -495,7 +497,9 @@ html, body {
         <div class="map-mode-badge" id="mapModeBadge">RF SIGNATURE SCAN · DIGITAL SNIFF v2</div>
         <div class="legend">
           <div class="legend-row"><div class="swatch sw-drone"></div>Drone (active)</div>
+          <div class="legend-row"><div class="swatch sw-mesh"></div>ESP-NOW Mesh Link</div>
           <div class="legend-row"><div class="swatch sw-victim"></div>RF Signature / Victim</div>
+          <div class="legend-row"><div class="swatch sw-reobs"></div>Reobserving</div>
           <div class="legend-row"><div class="swatch sw-confirm"></div>Confirmed Survivor</div>
           <div class="legend-row"><div class="swatch sw-rf"></div>RF Signal Ring</div>
           <div class="legend-row"><div class="swatch sw-coverage"></div>Area Swept</div>
@@ -571,6 +575,7 @@ const CONF_CONFIRM= 0.80;
 const CONF_DISMISS= 0.22;
 const EXCL_R      = SENSOR_R * 1.5;
 const SPEED       = 1.8;         // cells / second for sim
+const MESH_RANGE  = 45;          // ESP-NOW open-field range (cells) — bigger than the grid diagonal, so the mesh is normally fully connected
 
 /* ─── design tokens ──────────────────────────────────────────────────────── */
 const C = {
@@ -625,8 +630,8 @@ class Sim {
     // random victim positions (away from base)
     this.victims = [];
     const placed = [];
-    const kinds = ['victim','victim','victim','decoy','decoy'];
-    for (const k of kinds) {
+    const N_VICTIMS = 3;
+    for (let i = 0; i < N_VICTIMS; i++) {
       let x, y, tries = 0;
       do {
         x = 4 + rng() * (GRID - 8);
@@ -637,10 +642,8 @@ class Sim {
         (dist(x,y,BASE[0],BASE[1]) < 9 || placed.some(p=>dist(x,y,p[0],p[1])<7))
       );
       placed.push([x,y]);
-      const mac = k==='victim'
-        ? `AA:BB:CC:DD:EE:0${this.victims.filter(v=>v.kind==='victim').length+1}`
-        : `AA:BB:CC:DD:FF:0${this.victims.filter(v=>v.kind==='decoy').length+1}`;
-      this.victims.push({ x, y, mac, kind: k, logOdds: {} });
+      const mac = `AA:BB:CC:DD:EE:0${i + 1}`;
+      this.victims.push({ x, y, mac, kind: 'victim', logOdds: {}, task: null });
     }
 
     // hidden phone (for RF localization)
@@ -670,6 +673,7 @@ class Sim {
         trail: [],
         rfNearSince: null,
         rfSolved: false,
+        reobsVictim: null,
       };
     });
     this.swarmMACs = new Set(this.drones.map(d=>`FF:FF:FF:FF:FF:0${d.id}`));
@@ -869,6 +873,57 @@ class Sim {
       }
     }
 
+    // ── REOBSERVATION: nearest free drone converges on an uncertain sighting ──
+    // Mirrors the firmware auction (bidFor/runAuction in main.cpp): a single
+    // RF look sets confidence between the LO/HI gates, so the board that saw
+    // it announces a task; every other idle board prices it (closer + more
+    // diverse bearing = higher bid) and the winner diverts to take a second,
+    // independent look. Confirmation needs two looks from different angles —
+    // one drone alone loitering can't talk itself into a false confirm.
+    for (const v of this.victims) {
+      const totalLo  = Object.values(v.logOdds).reduce((a,b)=>a+b,0);
+      const nLooks   = Object.keys(v.logOdds).length;
+      const belief   = nLooks ? sigmoid(totalLo) : 0;
+      const resolved = this.confirmed.some(c=>dist(c.x,c.y,v.x,v.y)<3) ||
+                       this.dismissed.some(c=>dist(c.x,c.y,v.x,v.y)<3);
+
+      if (resolved) { v.task = null; continue; }
+
+      const uncertain = belief > 0.35 && belief < CONF_CONFIRM;
+
+      if (uncertain && !v.task) {
+        const ownerId = Number(Object.keys(v.logOdds)[0]);
+        v.task = { ownerId, assignedId: null };
+        this._log(`SIGHTING ${(belief*100).toFixed(0)}% at (${v.x.toFixed(1)},${v.y.toFixed(1)}) — REOBSERVE task announced`, 'sys');
+      }
+
+      if (v.task && v.task.assignedId == null) {
+        const free = this.drones.filter(d => d.alive && d.state === 0 && d.id !== v.task.ownerId);
+        if (free.length) {
+          const nearest = free.reduce((a,b) => dist(b.x,b.y,v.x,v.y) < dist(a.x,a.y,v.x,v.y) ? b : a);
+          nearest.state       = 1;
+          nearest.goal        = [v.x, v.y];
+          nearest.reobsVictim = v;
+          v.task.assignedId   = nearest.id;
+          this._log(`D${nearest.id} nearest free drone — diverting to reobserve (${v.x.toFixed(1)},${v.y.toFixed(1)})`, 'rf');
+        }
+      }
+
+      if (!uncertain && v.task) v.task = null;   // resolved next tick, or the signal faded
+    }
+
+    // release any drone whose reobserve task is no longer live
+    for (const d of this.drones) {
+      if (d.state !== 1) continue;
+      const v = d.reobsVictim;
+      const stillActive = v && v.task && v.task.assignedId === d.id;
+      if (!stillActive) {
+        d.state       = 0;
+        d.goal        = null;
+        d.reobsVictim = null;
+      }
+    }
+
     // age RF rings
     this.rfRings = this.rfRings.filter(r => r.alpha > 0.02);
     for (const r of this.rfRings) {
@@ -937,12 +992,12 @@ class Renderer {
   gx(x) { return this.ox + x * this.cell; }
   gy(y) { return this.oy + y * this.cell; }
 
-  _quad(ctx, cx, cy, heading, alive, cell) {
+  _quad(ctx, cx, cy, heading, alive, cell, reobs) {
     // Quadcopter icon: 4 diagonal arms + rotor disc at each tip + body
     const arm  = Math.max(2, cell * 0.52);
     const rot  = Math.max(1, cell * 0.17);   // rotor radius
     const body = Math.max(1, cell * 0.13);
-    const col  = alive ? C.cyan : C.orange;
+    const col  = !alive ? C.orange : reobs ? C.yellow : C.cyan;
     const rgb  = hexToRgb(col);
     ctx.save();
     ctx.translate(cx, cy);
@@ -1062,6 +1117,34 @@ class Renderer {
     ctx.textAlign  = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('BASE', bx, by);
     ctx.restore();
+
+    // ── ESP-NOW mesh links (subtle dotted lines between live boards) ──
+    // Real peer-to-peer connectivity: every board broadcasts a 5Hz heartbeat
+    // over ESP-NOW and every other board hears it (that's the mesh, not wifi
+    // infra). This draws a link whenever both ends are alive and in range —
+    // it's the same condition the firmware uses to keep a peer "UP".
+    {
+      const dr = (state.drones || []);
+      const live = dr.filter(d => (hwState ? d.alive : true));
+      ctx.save();
+      ctx.setLineDash([1, 4]);
+      for (let i = 0; i < live.length; i++) {
+        for (let j = i + 1; j < live.length; j++) {
+          const a = live[i], b = live[j];
+          const d = dist(a.x, a.y, b.x, b.y);
+          if (d > MESH_RANGE) continue;
+          const fade = Math.max(0.05, 1 - d / MESH_RANGE);
+          ctx.strokeStyle = `rgba(58,143,212,${0.16 * fade})`;
+          ctx.lineWidth   = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(this.gx(a.x), this.gy(a.y));
+          ctx.lineTo(this.gx(b.x), this.gy(b.y));
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
 
     // ── RF signal rings (subtle, fast-fading) ────────────────
     ctx.save();
@@ -1213,7 +1296,7 @@ class Renderer {
     for (const d of (state.drones||[])) {
       const alive = hwState ? d.alive : true;
       const dx    = this.gx(d.x), dy = this.gy(d.y);
-      this._quad(ctx, dx, dy, d.heading||0, alive, cell);
+      this._quad(ctx, dx, dy, d.heading||0, alive, cell, d.state === 1);
       // Drone ID label
       ctx.save();
       ctx.fillStyle    = alive ? 'rgba(58,143,212,0.75)' : 'rgba(200,100,40,0.7)';
@@ -1223,13 +1306,15 @@ class Renderer {
       ctx.fillText(`D${d.id||'?'}`, dx, dy + cell * 0.55);
       ctx.restore();
 
-      // goal line (dotted, very dim)
-      if (d.goal && d.state === 0) {
-        const rgb = hexToRgb(C.cyan);
+      // goal line — dim dotted while SEARCHing, brighter amber while
+      // REOBSERVEing (a second drone diverting to confirm a sighting)
+      if (d.goal && (d.state === 0 || d.state === 1)) {
+        const reobs = d.state === 1;
+        const rgb = hexToRgb(reobs ? C.yellow : C.cyan);
         ctx.save();
-        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.08)`;
-        ctx.lineWidth   = 0.5;
-        ctx.setLineDash([2,5]);
+        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${reobs ? 0.5 : 0.08})`;
+        ctx.lineWidth   = reobs ? 0.9 : 0.5;
+        ctx.setLineDash(reobs ? [3,3] : [2,5]);
         ctx.beginPath();
         ctx.moveTo(dx, dy);
         ctx.lineTo(this.gx(d.goal[0]), this.gy(d.goal[1]));
@@ -1404,7 +1489,7 @@ let missionStart = Date.now();
 let last = performance.now();
 
 addLog('00:00', 'KHOJ Digital Sniffing bridge initialised', 'sys');
-addLog('00:00', `Grid ${GRID}×${GRID}  |  ${sim.victims.filter(v=>v.kind==='victim').length} victims + ${sim.victims.filter(v=>v.kind==='decoy').length} decoys placed`, 'sys');
+addLog('00:00', `Grid ${GRID}×${GRID}  |  ${sim.victims.length} victims placed`, 'sys');
 addLog('00:00', 'Any RF signature not belonging to the swarm = potential victim', 'detect');
 addLog('00:00', 'Attempting to connect to backend at ws://127.0.0.1:8000/ws …', 'sys');
 connectWS();

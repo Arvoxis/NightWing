@@ -608,7 +608,7 @@ def main():
     ap.add_argument("--no-phone",  action="store_true")
     ap.add_argument("--rf-range",  type=float, default=14.0)
     ap.add_argument("--n-victims", type=int,   default=3)
-    ap.add_argument("--n-decoys",  type=int,   default=2)
+    ap.add_argument("--n-decoys",  type=int,   default=0)
     ap.add_argument("--base", nargs=2, type=float, metavar=("X", "Y"),
                     default=[2.0, 2.0])
     ap.add_argument("--seed",      type=int,   default=7)

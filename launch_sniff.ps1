@@ -6,7 +6,7 @@ param(
     [string[]] $Ports  = @("COM3","COM13","COM15","COM16"),
     [int]      $Speed  = 2,
     [int]      $NVicts = 3,
-    [int]      $NDecoy = 2
+    [int]      $NDecoy = 0
 )
 
 Set-Location (Split-Path $PSScriptRoot -Parent)   # repo root (NightWing\)
