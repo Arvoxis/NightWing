@@ -117,22 +117,15 @@ class HardwareStateGenerator:
         confirmed = [{"x": round(float(p[0]), 2), "y": round(float(p[1]), 2)}
                      for p in (snap.get("confirmed") or [])]
 
-        # What the map draws as "survivors": everything the SWARM resolved as a
-        # survivor, plus the RF estimate as an unconfirmed candidate (the frontend
-        # renders non-confirmed with a dashed ring, which is exactly right for a
-        # radio fix nobody has laid eyes on yet). Dismissed spots are carried in
-        # an additive key but deliberately NOT drawn - they are resolved
-        # non-events, and putting them on the map invites misreading them as finds.
+        # Survivors on the map = only what the SWARM visually resolved. The RF
+        # source is drawn separately (see the payload's `rf` / `ground_truth`),
+        # NOT as a survivor - mixing a radio fix into the survivor list is exactly
+        # what made the map confusing. Dismissed spots are carried additively but
+        # deliberately not drawn (resolved non-events).
         survivors = [{"id": i, "x": c["x"], "y": c["y"], "confidence": 1.0,
                       "status": "confirmed", "n_views": 2, "modality": "vision"}
                      for i, c in enumerate(confirmed)]
         rf = snap.get("rf")
-        if rf:
-            survivors.append({
-                "id": len(survivors), "x": round(float(rf[0]), 2),
-                "y": round(float(rf[1]), 2), "confidence": 0.5,
-                "status": "candidate", "n_views": 1, "modality": "rf",
-            })
 
         return {
             # ---- exactly the shape frontend/app.js already consumes ----------

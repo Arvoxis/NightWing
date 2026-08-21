@@ -70,6 +70,8 @@ function normalizeState(raw) {
       coverage: null,
       mission_complete: false,
       bridge: null,
+      rf: null,
+      ground_truth: null,
     };
   }
 
@@ -117,6 +119,8 @@ function normalizeState(raw) {
     coverage: isFiniteNumber(raw.coverage) ? Number(raw.coverage) : null,
     mission_complete: Boolean(raw.mission_complete),
     bridge: raw.bridge && typeof raw.bridge === 'object' ? raw.bridge : null,
+    rf: Array.isArray(raw.rf) && raw.rf.length === 2 ? raw.rf : null,
+    ground_truth: raw.ground_truth && typeof raw.ground_truth === 'object' ? raw.ground_truth : null,
   };
 }
 
@@ -477,6 +481,55 @@ function drawSurvivors(simState, settings) {
   }
 }
 
+function drawRf(simState, settings) {
+  // The RF-localization hero, made legible: the HIDDEN phone (ground truth the
+  // drones never see) pulses signal rings, and the swarm's cooperative RF
+  // ESTIMATE is a bright crosshair that converges onto it as the drones triangulate.
+  const { scale, originX, originY } = settings;
+  const gt = simState.ground_truth || {};
+  const phone = Array.isArray(gt.phone) && gt.phone.length === 2 ? gt.phone : null;
+  const rf = simState.rf;
+  const t = performance.now() / 1000;
+
+  if (phone) {
+    const px = Number(phone[0]) * scale + originX;
+    const py = Number(phone[1]) * scale + originY;
+    const pulse = (Math.sin(t * 2) + 1) / 2;
+    for (let k = 0; k < 3; k += 1) {
+      ctx.globalAlpha = 0.34 - k * 0.1;
+      ctx.strokeStyle = '#d95d5d';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, 12 + k * 12 + pulse * 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#d95d5d';
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = '11px "IBM Plex Mono", monospace';
+    ctx.fillText('hidden phone', px + 12, py + 4);
+  }
+
+  if (rf) {
+    const ex = Number(rf[0]) * scale + originX;
+    const ey = Number(rf[1]) * scale + originY;
+    ctx.strokeStyle = '#4dd0e1';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ex, ey, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex - 15, ey); ctx.lineTo(ex + 15, ey);
+    ctx.moveTo(ex, ey - 15); ctx.lineTo(ex, ey + 15);
+    ctx.stroke();
+    ctx.fillStyle = '#4dd0e1';
+    ctx.font = 'bold 11px "IBM Plex Mono", monospace';
+    ctx.fillText('RF SOURCE', ex + 14, ey - 10);
+  }
+}
+
 function getInterpolatedAgent(agent) {
   if (!state.previous || !state.previous.agents) {
     return { ...agent };
@@ -649,6 +702,7 @@ function renderFrame() {
   drawHeatmap(simState, settings);
   drawSearchCoverage(simState, settings);
   drawTasks(simState, settings);
+  drawRf(simState, settings);
   drawSurvivors(simState, settings);
   drawDrones(simState, settings);
   drawSelectionHover(simState, settings);

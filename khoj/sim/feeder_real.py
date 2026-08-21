@@ -469,12 +469,30 @@ def find_ports():
 
 def parse_pts(s):
     out = []
-    for part in s.split(";"):
+    for part in (s or "").split(";"):
         part = part.strip()
         if part:
             x, y = part.split(",")
             out.append((float(x), float(y)))
     return out
+
+
+def random_points(n, grid, rng, base, avoid=(), min_sep=6.0, base_clear=9.0):
+    """n survivor/decoy cells at RANDOM, spread out: kept away from the launch
+    base (so they aren't found for free) and at least min_sep from each other and
+    from `avoid` (so victims and decoys never sit on top of one another)."""
+    pts = []
+    for _ in range(n):
+        for _try in range(400):
+            x = round(rng.uniform(3, grid - 3), 1)
+            y = round(rng.uniform(3, grid - 3), 1)
+            if math.hypot(x - base[0], y - base[1]) < base_clear:
+                continue
+            if any(math.hypot(x - px, y - py) < min_sep for px, py in list(pts) + list(avoid)):
+                continue
+            pts.append((x, y))
+            break
+    return pts
 
 
 # ---- world construction ----------------------------------------------------
@@ -701,29 +719,30 @@ def main():
     ap.add_argument("--ports", nargs="*", default=None)
     ap.add_argument("--hz", type=float, default=10.0)
     ap.add_argument("--grid", type=float, default=float(GRID_N))
-    ap.add_argument("--speed", type=float, default=4.0,
-                    help="body speed in CELLS/SECOND. Faster = the swarm sweeps the "
-                         "grid and reaches survivors in seconds (snappy demo). The "
-                         "firmware bid uses AGENT_SPEED=%.1f for cost, but that only "
-                         "scales bids uniformly so the auction winner is unchanged."
-                         % AGENT_SPEED)
+    ap.add_argument("--speed", type=float, default=2.0,
+                    help="body speed in CELLS/SECOND (default matches firmware "
+                         "AGENT_SPEED=%.1f). Lower = slower, easier to watch the "
+                         "re-observe and RF play out." % AGENT_SPEED)
     ap.add_argument("--detector", choices=["auto", "real", "sim"], default="auto",
                     help="auto: real if weights+SARD present, else sim")
     ap.add_argument("--weights", default=None, help="path to best.pt (else auto-resolved)")
     ap.add_argument("--sard", default="SARD_YOLO.v1-original.yolov11/test",
                     help="SARD test split (images/ + labels/)")
-    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"), default=[22.0, 24.0],
+    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"), default=None,
                     help="hidden phone at X Y for the RF-localization hero (boards "
-                         "never see it). ON by default. The RF-near firmware gate "
-                         "keeps it from clumping the swarm - only the closest drone "
-                         "or two converge on it while the rest keep searching.")
+                         "never see it). Default: a RANDOM cell each run. The RF-near "
+                         "firmware gate keeps it from clumping the swarm.")
     ap.add_argument("--no-phone", action="store_true",
                     help="disable RF entirely (pure search, exactly like the sim)")
-    ap.add_argument("--rf-range", type=float, default=12.0,
+    ap.add_argument("--rf-range", type=float, default=14.0,
                     help="when --phone is on, it's only 'audible' within this many "
                          "cells (the grid is 32 wide). 0 = audible everywhere.")
-    ap.add_argument("--victims", default="10,10;26,8", help="real survivors 'x,y;x,y'")
-    ap.add_argument("--decoys", default="6,20;18,17", help="false alarms")
+    ap.add_argument("--victims", default=None,
+                    help="real survivors 'x,y;x,y'. Default: RANDOM cells (--n-victims).")
+    ap.add_argument("--decoys", default=None,
+                    help="false alarms 'x,y;x,y'. Default: RANDOM cells (--n-decoys).")
+    ap.add_argument("--n-victims", type=int, default=3, help="how many random survivors")
+    ap.add_argument("--n-decoys", type=int, default=2, help="how many random decoys")
     ap.add_argument("--base", nargs=2, type=float, metavar=("X", "Y"), default=[2.0, 2.0],
                     help="return-to-base origin; drones fly here once every victim is "
                          "confirmed and every decoy dismissed")
@@ -740,9 +759,22 @@ def main():
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
-    phone = None if (a.no_phone or not a.phone) else tuple(a.phone)
-    victims_xy = parse_pts(a.victims)
-    decoys_xy = parse_pts(a.decoys)
+    base = tuple(a.base)
+    # survivors & decoys: explicit if given, else scattered at RANDOM cells (spread
+    # out, away from base, never overlapping) so every run is a fresh search - and
+    # so a run never lands on a spot the boards already marked resolved.
+    victims_xy = parse_pts(a.victims) if a.victims else \
+        random_points(a.n_victims, int(a.grid), rng, base)
+    decoys_xy = parse_pts(a.decoys) if a.decoys else \
+        random_points(a.n_decoys, int(a.grid), rng, base, avoid=victims_xy)
+    # hidden phone: explicit, off, or a random cell (away from base and targets)
+    if a.no_phone:
+        phone = None
+    elif a.phone:
+        phone = tuple(a.phone)
+    else:
+        rp = random_points(1, int(a.grid), rng, base, avoid=victims_xy + decoys_xy)
+        phone = rp[0] if rp else None
 
     # ---- decide detector mode ----------------------------------------------
     per, reason = (None, "")
@@ -813,10 +845,17 @@ def main():
     if not bodies:
         sys.exit("No port could be opened. Close any serial monitor holding them.")
 
+    # All drones LAUNCH FROM THE BASE, then fan out under the spread planner (a
+    # tiny per-drone offset so they're distinguishable at t=0, not stacked).
+    for i, b in enumerate(bodies):
+        ang = 2.0 * math.pi * i / max(1, len(bodies))
+        b.x = base[0] + 0.6 * math.cos(ang)
+        b.y = base[1] + 0.6 * math.sin(ang)
+        b.goal = (b.x, b.y)
+
     dt = 1.0 / a.hz
     step_cells = a.speed * dt            # cells moved per tick at this rate
     recent_dets: list = []               # time-expired, so old glows fade off the map
-    base = tuple(a.base)
     n_victims, n_decoys = len(victims_xy), len(decoys_xy)
     rf_solved = False                    # RF source localized -> phone switched off
     rf_near_since = None                 # when a drone first sat on the source
