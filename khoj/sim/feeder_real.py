@@ -312,10 +312,16 @@ class Body:
         self.ser.reset_input_buffer()
 
     def alive(self):
-        """A board is 'alive' only while its goals keep coming back. Once it goes
-        quiet (unplugged / powered off) we freeze its body instead of flying a
-        phantom around the map."""
+        """Actively responding: a goal came back recently. Drives the DEAD marker
+        on the dashboard."""
         return self.last_rx > 0.0 and (time.time() - self.last_rx) < ALIVE_S
+
+    def dead(self):
+        """WAS talking and then went silent (unplugged / powered off) -> freeze it
+        so we don't fly a phantom. A board that has NEVER replied yet is only
+        'connecting', NOT dead - we must keep sending it sensor packets or it can
+        never bootstrap into replying (the board only answers a packet it receives)."""
+        return self.last_rx > 0.0 and (time.time() - self.last_rx) >= ALIVE_S
 
     # ---- talk to the board -------------------------------------------------
 
@@ -809,10 +815,12 @@ def main():
                          and not b.board_in_charge() and b.agent_id not in (0, a.beacon)]
             fgoals = coverage.goals_for(searching)
 
-            # 3) move each body, sense, and stream a fresh sensor packet
+            # 3) move each body, sense, and stream a fresh sensor packet.
+            #    Freeze ONLY boards that were alive and then went silent. A board
+            #    that hasn't replied yet still gets packets so it can bootstrap.
             for b in bodies:
-                if not b.alive():
-                    continue                            # frozen: no fly, no sense, no send
+                if b.dead():
+                    continue                            # unplugged: no fly, no sense, no send
                 if mission_done:
                     b.returning = True                  # all found -> return to base
                     tx, ty = base
