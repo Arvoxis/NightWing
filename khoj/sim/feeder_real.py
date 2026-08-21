@@ -94,6 +94,10 @@ GRID_N      = 32        # canonical grid, float cells
 BASE_XY     = (2.0, 2.0)  # return-to-base origin the drones launch from / go home to
 ALIVE_S     = 2.5       # no goal back for this long => board is offline (frozen on screen)
 DET_TTL_S   = 2.5       # a detection older than this stops glowing on the map
+RF_SOLVE_DIST = 1.6     # a drone this close to the phone counts as localizing it
+RF_SOLVE_HOLD = 1.5     # sustained for this long => RF solved: switch the phone OFF so
+                        # the swarm unlocks and goes back to searching instead of every
+                        # drone piling onto the source forever (the RF black-hole bug)
 
 # Detector confidence bands (0..1) we STEER the world toward, so detections land
 # in the auction band (CONF_LO < c < CONF_HI) and actually resolve under fusion:
@@ -205,6 +209,7 @@ class Coverage:
         self.prob = [[0.0] * grid for _ in range(grid)]   # laptop tracks no belief
         self._sw = None
         self._ids: tuple = ()
+        self._assigned: dict = {}         # aid -> its committed frontier goal (sticky)
         try:
             from engine.swarm import Swarm, BrainConfig  # noqa: F401
             from engine.protocol import TaskType         # noqa: F401
@@ -216,6 +221,7 @@ class Coverage:
     def reset(self):
         """Wipe the searched map so the frontier search starts over (RESTART)."""
         self.known = [[0.0] * self.grid for _ in range(self.grid)]
+        self._assigned = {}
 
     def mark_seen(self, x, y):
         """Everything under a footprint is now searched - retires the frontier."""
@@ -237,8 +243,15 @@ class Coverage:
 
     def goals_for(self, searching):
         """searching: list of (agent_id, x, y). Returns {agent_id: (gx, gy)}.
-        Nearest open frontier per idle board; if the map is fully searched, an
-        expanding orbit so nobody freezes on a hold."""
+
+        Two rules that together make the swarm actually SWEEP the map instead of
+        expanding one slow blob (which never reached the far survivors):
+          * STICKY   - a drone commits to its frontier until it's explored, so it
+                       doesn't thrash between goals every tick.
+          * SPREAD   - a new frontier is chosen FAR from the other drones' goals
+                       (lightly damped by travel distance), so the drones fan out
+                       into different regions and cover ground in parallel.
+        Falls back to an expanding orbit only when the whole grid is searched."""
         if not searching:
             return {}
         if not self._ok:
@@ -251,16 +264,39 @@ class Coverage:
             if b:
                 b.x, b.y, b.current_task = x, y, None
         sw.rebuild_frontier_tasks(self.known, self.prob, self.grid, self.grid)
-        open_tasks = [t for t in sw.tasks.values()
-                      if t.type == TaskType.FRONTIER and t.open]
-        out = {}
+        open_pts = [(t.x, t.y) for t in sw.tasks.values()
+                    if t.type == TaskType.FRONTIER and t.open]
+        step = float(sw.cfg.frontier_step)
+        live = {a for a, _, _ in searching}
+        self._assigned = {a: p for a, p in self._assigned.items() if a in live}
+
+        if not open_pts:
+            return {aid: self._orbit(aid, x, y) for aid, x, y in searching}
+
+        out, claimed = {}, []
         for aid, x, y in sorted(searching):         # deterministic: lowest id first
-            if open_tasks:
-                t = min(open_tasks, key=lambda t: math.hypot(t.x - x, t.y - y))
-                open_tasks.remove(t)                # one frontier per drone this round
-                out[aid] = (t.x, t.y)
+            cur = self._assigned.get(aid)
+            # keep the committed goal while it's still an unexplored frontier and
+            # the drone hasn't arrived (and no one else already claimed it).
+            if (cur is not None and cur not in claimed
+                    and math.hypot(cur[0] - x, cur[1] - y) > step
+                    and any(math.hypot(cur[0] - px, cur[1] - py) <= step for px, py in open_pts)):
+                out[aid] = cur
+                claimed.append(cur)
+                continue
+            avail = [p for p in open_pts if p not in claimed]
+            if not avail:
+                out[aid] = self._orbit(aid, x, y)
+                continue
+            if not claimed:
+                p = min(avail, key=lambda p: math.hypot(p[0] - x, p[1] - y))
             else:
-                out[aid] = self._orbit(aid, x, y)   # nothing left unknown -> orbit
+                p = max(avail, key=lambda p: (
+                    min(math.hypot(p[0] - cx, p[1] - cy) for cx, cy in claimed)
+                    - 0.25 * math.hypot(p[0] - x, p[1] - y)))
+            out[aid] = p
+            self._assigned[aid] = p
+            claimed.append(p)
         return out
 
     def _orbit(self, aid, x, y):
@@ -614,11 +650,13 @@ def _resolved_points(events, keyword):
 
 
 def build_snapshot(a, tick, mode, detector_reason, phone, targets, bodies,
-                   coverage, recent_dets, mission_done=False):
+                   coverage, recent_dets, mission_done=False, rf_override=None):
     """Assemble the hardware snapshot the dashboard's HardwareStateGenerator maps
     onto SimState. This is the firmware-facing side of the same split real_state.py
     uses: we speak boards/ports/state-enums here; the dashboard translates."""
-    rf = next((b.rf_est for b in bodies if b.rf_est and b.alive()), None)
+    # rf_override is the frozen post-localization estimate; keep it on the map even
+    # after the boards have unlocked and stopped reporting a live fix.
+    rf = rf_override or next((b.rf_est for b in bodies if b.rf_est and b.alive()), None)
     boards = []
     for b in bodies:
         boards.append({
@@ -663,21 +701,24 @@ def main():
     ap.add_argument("--ports", nargs="*", default=None)
     ap.add_argument("--hz", type=float, default=10.0)
     ap.add_argument("--grid", type=float, default=float(GRID_N))
-    ap.add_argument("--speed", type=float, default=AGENT_SPEED,
-                    help="body speed in CELLS/SECOND (must match firmware AGENT_SPEED)")
+    ap.add_argument("--speed", type=float, default=4.0,
+                    help="body speed in CELLS/SECOND. Faster = the swarm sweeps the "
+                         "grid and reaches survivors in seconds (snappy demo). The "
+                         "firmware bid uses AGENT_SPEED=%.1f for cost, but that only "
+                         "scales bids uniformly so the auction winner is unchanged."
+                         % AGENT_SPEED)
     ap.add_argument("--detector", choices=["auto", "real", "sim"], default="auto",
                     help="auto: real if weights+SARD present, else sim")
     ap.add_argument("--weights", default=None, help="path to best.pt (else auto-resolved)")
     ap.add_argument("--sard", default="SARD_YOLO.v1-original.yolov11/test",
                     help="SARD test split (images/ + labels/)")
-    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"), default=None,
-                    help="OPT-IN RF demo: hidden phone at X Y (boards never see it). "
-                         "OFF by default so the swarm behaves like the pure-search "
-                         "python sim. With the RF-near firmware gate, turning it on "
-                         "only pulls the closest drone or two onto the phone; the "
-                         "rest keep searching.")
-    ap.add_argument("--no-phone", action="store_true", help="(kept for compatibility; "
-                    "phone is already off unless --phone is given)")
+    ap.add_argument("--phone", nargs=2, type=float, metavar=("X", "Y"), default=[22.0, 24.0],
+                    help="hidden phone at X Y for the RF-localization hero (boards "
+                         "never see it). ON by default. The RF-near firmware gate "
+                         "keeps it from clumping the swarm - only the closest drone "
+                         "or two converge on it while the rest keep searching.")
+    ap.add_argument("--no-phone", action="store_true",
+                    help="disable RF entirely (pure search, exactly like the sim)")
     ap.add_argument("--rf-range", type=float, default=12.0,
                     help="when --phone is on, it's only 'audible' within this many "
                          "cells (the grid is 32 wide). 0 = audible everywhere.")
@@ -777,6 +818,9 @@ def main():
     recent_dets: list = []               # time-expired, so old glows fade off the map
     base = tuple(a.base)
     n_victims, n_decoys = len(victims_xy), len(decoys_xy)
+    rf_solved = False                    # RF source localized -> phone switched off
+    rf_near_since = None                 # when a drone first sat on the source
+    rf_final = None                      # frozen RF estimate, kept on the map after solve
     t_wall0 = time.time()
     tick = 0
     try:
@@ -801,6 +845,29 @@ def main():
             # 1) read every board's latest goal + log lines
             for b in bodies:
                 b.read_goal()
+
+            # RF hero, self-limiting: while the phone is on, the closest drone
+            # converges on it. The moment one sits on the source we call it
+            # localized, FREEZE the estimate for the map, and turn the phone OFF -
+            # so the boards' RF unlocks (stale samples) and the swarm goes back to
+            # searching, instead of every drone drifting into the source and parking
+            # there forever (the black-hole we just saw on the bench).
+            rf_now = next((b.rf_est for b in bodies if b.rf_est and b.alive()), None)
+            if rf_now:
+                rf_final = rf_now
+            if phone and not rf_solved:
+                dmin = min((math.hypot(b.x - phone[0], b.y - phone[1])
+                            for b in bodies if b.alive()), default=1e9)
+                if dmin <= RF_SOLVE_DIST:
+                    rf_near_since = rf_near_since or now
+                    if now - rf_near_since >= RF_SOLVE_HOLD:
+                        rf_solved = True
+                        rf_final = rf_final or phone
+                        _ev("RF SOURCE localized at (%.1f,%.1f) - swarm resuming search"
+                            % tuple(rf_final))
+                else:
+                    rf_near_since = None
+            phone_active = None if rf_solved else phone
 
             # mission complete once every real survivor is confirmed and every
             # decoy dismissed -> the swarm has nothing left to do but come home.
@@ -835,12 +902,12 @@ def main():
                 b.fly_to(tx, ty, step_cells)
                 coverage.mark_seen(b.x, b.y)
 
-                # RF is only heard within rf_range of the phone. Beyond that the
-                # drone gets no reading (-128), so it keeps searching instead of
-                # RF-locking on a signal it realistically couldn't detect yet.
-                if phone and (a.rf_range <= 0 or
-                              math.hypot(b.x - phone[0], b.y - phone[1]) <= a.rf_range):
-                    rssi = Sensing.rssi_from(b.x, b.y, *phone)
+                # RF is only heard within rf_range of the phone, and only until the
+                # source is localized (phone_active goes None). Beyond that a drone
+                # gets no reading (-128) and keeps searching.
+                if phone_active and (a.rf_range <= 0 or
+                        math.hypot(b.x - phone_active[0], b.y - phone_active[1]) <= a.rf_range):
+                    rssi = Sensing.rssi_from(b.x, b.y, *phone_active)
                 else:
                     rssi = -128
                 det = sensing.look(b.x, b.y, b.heading, b.agent_id, sim_t, rng)
@@ -858,7 +925,8 @@ def main():
             # 4) push the live snapshot to the web dashboard (non-blocking)
             if client is not None:
                 client.push(build_snapshot(a, tick, mode, reason, phone, targets,
-                                           bodies, coverage, recent_dets, mission_done))
+                                           bodies, coverage, recent_dets, mission_done,
+                                           rf_override=rf_final))
 
             # 5) console scoreboard, twice a second
             if tick % max(1, int(a.hz / 2)) == 0:
