@@ -53,7 +53,6 @@ import sys
 import threading
 import time
 import urllib.request
-from collections import deque
 
 # ---------------------------------------------------------------------------
 # Import path: this file lives at <NightWing>/khoj/sim/feeder_real.py and needs
@@ -92,6 +91,9 @@ SENSOR_R    = 3.5       # camera footprint radius, cells (world.sensor_radius)
 CONF_LO     = 15        # <= this: board ignores it        (main.cpp CONF_LO)
 CONF_HI     = 80        # >= this: board auto-confident     (main.cpp CONF_HI)
 GRID_N      = 32        # canonical grid, float cells
+BASE_XY     = (2.0, 2.0)  # return-to-base origin the drones launch from / go home to
+ALIVE_S     = 2.5       # no goal back for this long => board is offline (frozen on screen)
+DET_TTL_S   = 2.5       # a detection older than this stops glowing on the map
 
 # Detector confidence bands (0..1) we STEER the world toward, so detections land
 # in the auction band (CONF_LO < c < CONF_HI) and actually resolve under fusion:
@@ -211,6 +213,10 @@ class Coverage:
             _ev("WARN frontier unavailable (%s) - idle drones will orbit" % e)
             self._ok = False
 
+    def reset(self):
+        """Wipe the searched map so the frontier search starts over (RESTART)."""
+        self.known = [[0.0] * self.grid for _ in range(self.grid)]
+
     def mark_seen(self, x, y):
         """Everything under a footprint is now searched - retires the frontier."""
         r = SENSOR_R
@@ -300,9 +306,16 @@ class Body:
         self.parser = FrameParser()
         self.textbuf = ""               # boards mix log text with binary frames
         self.rf_est = None
-        self.last_rx = time.time()
+        self.returning = False          # heading home (mission complete)
+        self.last_rx = 0.0              # set on first goal; 0 = never heard yet
         time.sleep(0.2)
         self.ser.reset_input_buffer()
+
+    def alive(self):
+        """A board is 'alive' only while its goals keep coming back. Once it goes
+        quiet (unplugged / powered off) we freeze its body instead of flying a
+        phantom around the map."""
+        return self.last_rx > 0.0 and (time.time() - self.last_rx) < ALIVE_S
 
     # ---- talk to the board -------------------------------------------------
 
@@ -531,12 +544,19 @@ class DashboardClient:
         self._snap = None
         self._lock = threading.Lock()
         self._alive = True
+        self._reset = False             # set when the backend reports RESTART
         self.ok = None                  # None=never tried, True/False=last POST
         threading.Thread(target=self._run, daemon=True).start()
 
     def push(self, snap):
         with self._lock:
             self._snap = snap
+
+    def take_reset(self):
+        """One-shot: True exactly once after the dashboard's RESTART was pressed."""
+        with self._lock:
+            r, self._reset = self._reset, False
+            return r
 
     def _run(self):
         while self._alive:
@@ -550,7 +570,12 @@ class DashboardClient:
                 req = urllib.request.Request(
                     self.url, data=data,
                     headers={"Content-Type": "application/json"}, method="POST")
-                urllib.request.urlopen(req, timeout=0.6)
+                resp = urllib.request.urlopen(req, timeout=0.6)
+                if resp.getcode() == 200:
+                    body = json.loads(resp.read().decode() or "{}")
+                    if body.get("reset"):
+                        with self._lock:
+                            self._reset = True
                 self.ok = True
             except Exception:
                 self.ok = False
@@ -583,12 +608,11 @@ def _resolved_points(events, keyword):
 
 
 def build_snapshot(a, tick, mode, detector_reason, phone, targets, bodies,
-                   coverage, recent_dets):
+                   coverage, recent_dets, mission_done=False):
     """Assemble the hardware snapshot the dashboard's HardwareStateGenerator maps
     onto SimState. This is the firmware-facing side of the same split real_state.py
     uses: we speak boards/ports/state-enums here; the dashboard translates."""
-    now = time.time()
-    rf = next((b.rf_est for b in bodies if b.rf_est), None)
+    rf = next((b.rf_est for b in bodies if b.rf_est and b.alive()), None)
     boards = []
     for b in bodies:
         boards.append({
@@ -599,7 +623,8 @@ def build_snapshot(a, tick, mode, detector_reason, phone, targets, bodies,
             "state": b.last_state,
             "cur_task": b.cur_task,
             "goal": [round(b.goal[0], 2), round(b.goal[1], 2)],
-            "alive": (now - b.last_rx) < 2.0,
+            "alive": b.alive(),
+            "returning": bool(b.returning),
             "beacon": (b.agent_id == a.beacon),
             "packets": b.sent,
         })
@@ -609,7 +634,9 @@ def build_snapshot(a, tick, mode, detector_reason, phone, targets, bodies,
         "detector": ("real (%s)" % detector_reason) if mode == "real" else "sim bands",
         "known": coverage.known,
         "boards": boards,
-        "detections": list(recent_dets),
+        "detections": [{k: d[k] for k in ("agent_id", "x", "y", "confidence",
+                        "bearing", "timestamp")} for d in recent_dets],
+        "mission_complete": bool(mission_done),
         "confirmed": _resolved_points(EVENTS, "CONFIRMED"),
         "dismissed": _resolved_points(EVENTS, "DISMISSED"),
         "rf": [round(rf[0], 2), round(rf[1], 2)] if rf else None,
@@ -650,6 +677,9 @@ def main():
                          "cells (the grid is 32 wide). 0 = audible everywhere.")
     ap.add_argument("--victims", default="10,10;26,8", help="real survivors 'x,y;x,y'")
     ap.add_argument("--decoys", default="6,20;18,17", help="false alarms")
+    ap.add_argument("--base", nargs=2, type=float, metavar=("X", "Y"), default=[2.0, 2.0],
+                    help="return-to-base origin; drones fly here once every victim is "
+                         "confirmed and every decoy dismissed")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--beacon", type=int, default=-1,
                     help="board id to treat as a fixed beacon (held, not searched). "
@@ -738,29 +768,55 @@ def main():
 
     dt = 1.0 / a.hz
     step_cells = a.speed * dt            # cells moved per tick at this rate
-    recent_dets: deque = deque(maxlen=40)
+    recent_dets: list = []               # time-expired, so old glows fade off the map
+    base = tuple(a.base)
+    n_victims, n_decoys = len(victims_xy), len(decoys_xy)
     t_wall0 = time.time()
     tick = 0
     try:
         while True:
             t0 = time.time()
-            sim_t = time.time() - t_wall0    # seconds since start, for detector t
+            now = time.time()
+            sim_t = now - t_wall0            # seconds since start, for detector t
+
+            # 0) RESTART button: the backend flags a reset in its /ingest reply.
+            #    Clear everything the LAPTOP owns - coverage, detection glows, the
+            #    resolved-spot display - so the search visibly starts over. (The
+            #    boards keep their own resolved memory; a full wipe needs a
+            #    power-cycle, which is called out in the docs.)
+            if client is not None and client.take_reset():
+                coverage.reset()
+                recent_dets.clear()
+                EVENTS.clear()
+                for b in bodies:
+                    b.returning = False
+                _ev("RESTART - coverage and map cleared, resuming search")
 
             # 1) read every board's latest goal + log lines
             for b in bodies:
                 b.read_goal()
 
-            # 2) for SEARCHING boards, plan frontier goals with the real logic.
-            #    The beacon is a fixed transmitter/relay, not a searcher - exclude
-            #    it so the laptop never flies it around.
+            # mission complete once every real survivor is confirmed and every
+            # decoy dismissed -> the swarm has nothing left to do but come home.
+            n_conf = len(_resolved_points(EVENTS, "CONFIRMED"))
+            n_dism = len(_resolved_points(EVENTS, "DISMISSED"))
+            mission_done = (n_victims and n_conf >= n_victims and n_dism >= n_decoys)
+
+            # 2) plan frontier goals for LIVE, searching boards only (a dead board
+            #    is frozen, and the beacon, if any, is held).
             searching = [(b.agent_id, b.x, b.y) for b in bodies
-                         if b.real_id and not b.board_in_charge()
-                         and b.agent_id not in (0, a.beacon)]
+                         if b.alive() and b.real_id and not mission_done
+                         and not b.board_in_charge() and b.agent_id not in (0, a.beacon)]
             fgoals = coverage.goals_for(searching)
 
             # 3) move each body, sense, and stream a fresh sensor packet
             for b in bodies:
-                if b.agent_id == a.beacon:
+                if not b.alive():
+                    continue                            # frozen: no fly, no sense, no send
+                if mission_done:
+                    b.returning = True                  # all found -> return to base
+                    tx, ty = base
+                elif b.agent_id == a.beacon:
                     tx, ty = b.x, b.y                   # beacon holds its position
                 elif b.board_in_charge():
                     tx, ty = b.goal                     # obey the board's decision
@@ -786,13 +842,15 @@ def main():
                         "agent_id": b.agent_id, "x": round(det[0], 2),
                         "y": round(det[1], 2), "confidence": round(det[2], 3),
                         "bearing": math.atan2(det[1] - b.y, det[0] - b.x),
-                        "timestamp": int(time.time()),
+                        "timestamp": int(now), "t": now,
                     })
+            # expire stale detection glows so the map doesn't fill with old spots
+            recent_dets[:] = [d for d in recent_dets if now - d["t"] < DET_TTL_S]
 
             # 4) push the live snapshot to the web dashboard (non-blocking)
             if client is not None:
                 client.push(build_snapshot(a, tick, mode, reason, phone, targets,
-                                           bodies, coverage, recent_dets))
+                                           bodies, coverage, recent_dets, mission_done))
 
             # 5) console scoreboard, twice a second
             if tick % max(1, int(a.hz / 2)) == 0:

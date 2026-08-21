@@ -71,24 +71,29 @@ class HardwareStateGenerator:
         self._snap: dict | None = None
         self._at = 0.0                  # wall-clock time of the last ingest
         self._ingests = 0
+        self._reset_pending = False     # RESTART pressed, not yet relayed to the bridge
 
     # ---------------------------------------------------------------- ingest
 
     def ingest(self, snapshot: dict) -> dict:
         """Called by the backend when the bridge POSTs. Last write wins - a late
-        frame is worthless on a live dashboard, so nothing is queued."""
+        frame is worthless on a live dashboard, so nothing is queued. The reply
+        relays a pending RESTART back to the bridge (one-shot)."""
         self._snap = snapshot or {}
         self._at = time.time()
         self._ingests += 1
         g = self._snap.get("grid")
         if isinstance(g, (int, float)) and g > 0:
             self.grid = int(g)
-        return {"ok": True, "ingests": self._ingests}
+        reset, self._reset_pending = self._reset_pending, False
+        return {"ok": True, "ingests": self._ingests, "reset": reset}
 
     def reset(self, seed: int | None = None) -> None:
-        """The dashboard's RESTART button. Deliberately a no-op: this generator
-        does not own the mission - five physical boards do, and the laptop can't
-        restart their belief. Power-cycle the boards for a clean slate."""
+        """The dashboard's RESTART button. The laptop can't wipe the boards' own
+        resolved memory (that needs a power-cycle), but it CAN restart the search:
+        this flags a reset that the next /ingest reply relays to the bridge, which
+        clears coverage + the map and resumes searching."""
+        self._reset_pending = True
         return None
 
     # ---------------------------------------------------------------- tick
@@ -151,7 +156,7 @@ class HardwareStateGenerator:
             # ---- additive richness (ignored by the current frontend) ---------
             "tick": snap.get("tick", 0),
             "coverage": self._coverage(known, grid),
-            "mission_complete": False,
+            "mission_complete": bool(snap.get("mission_complete")),
             "survivors": survivors,
             "dismissed": snap.get("dismissed") or [],
             "events": snap.get("events") or [],
@@ -184,6 +189,8 @@ class HardwareStateGenerator:
         alive = bool(b.get("alive")) and online
         if not alive:
             state = "DEAD"
+        elif b.get("returning"):
+            state = "RETURNING"        # mission done, heading home (renders orange)
         elif b.get("beacon"):
             # the beacon is a fixed transmitter/relay, not a searcher. "IDLE"
             # renders grey, which reads correctly next to four moving drones.
