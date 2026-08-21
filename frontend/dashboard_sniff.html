@@ -10,24 +10,24 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:         #050a12;
-  --surface:    #0a1626;
-  --surface2:   #0f1e36;
-  --border:     rgba(0, 180, 255, 0.12);
-  --border2:    rgba(0, 180, 255, 0.22);
-  --cyan:       #00d4ff;
-  --cyan-dim:   rgba(0, 212, 255, 0.18);
-  --cyan-glow:  rgba(0, 212, 255, 0.06);
-  --orange:     #ff7040;
-  --orange-dim: rgba(255, 112, 64, 0.18);
-  --green:      #2dffaa;
-  --green-dim:  rgba(45, 255, 170, 0.18);
-  --purple:     #b060ff;
-  --purple-dim: rgba(176, 96, 255, 0.18);
-  --yellow:     #ffd040;
-  --text-hi:    #e8f0fa;
-  --text-mid:   #7a9abf;
-  --text-lo:    #3a5575;
+  --bg:         #0b0f14;
+  --surface:    #111822;
+  --surface2:   #16202e;
+  --border:     rgba(60, 100, 150, 0.18);
+  --border2:    rgba(60, 100, 150, 0.32);
+  --cyan:       #3a8fd4;
+  --cyan-dim:   rgba(58, 143, 212, 0.12);
+  --cyan-glow:  rgba(58, 143, 212, 0.06);
+  --orange:     #c86428;
+  --orange-dim: rgba(200, 100, 40, 0.14);
+  --green:      #2d9e5f;
+  --green-dim:  rgba(45, 158, 95, 0.14);
+  --purple:     #6b4db0;
+  --purple-dim: rgba(107, 77, 176, 0.14);
+  --yellow:     #b89030;
+  --text-hi:    #c4d4e4;
+  --text-mid:   #5a7898;
+  --text-lo:    #2e4560;
   --fn: "Rajdhani", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", "Consolas", monospace;
 }
@@ -68,8 +68,7 @@ html, body {
   position: absolute;
   bottom: 0; left: 0; right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cyan), var(--purple), transparent);
-  opacity: 0.6;
+  background: var(--border2);
 }
 .brand {
   display: flex;
@@ -492,7 +491,6 @@ html, body {
     <!-- MAP -->
     <div class="map-wrap">
       <canvas id="mapCanvas"></canvas>
-      <div class="scanline"></div>
       <div class="map-labels">
         <div class="map-mode-badge" id="mapModeBadge">RF SIGNATURE SCAN · DIGITAL SNIFF v2</div>
         <div class="legend">
@@ -576,20 +574,21 @@ const SPEED       = 1.8;         // cells / second for sim
 
 /* ─── design tokens ──────────────────────────────────────────────────────── */
 const C = {
-  bg:       '#020710',
-  grid:     '#0a1828',
-  cyan:     '#00d4ff',
-  cyanDim:  'rgba(0,212,255,0.12)',
-  orange:   '#ff7040',
-  orangeDim:'rgba(255,112,64,0.12)',
-  green:    '#2dffaa',
-  greenDim: 'rgba(45,255,170,0.12)',
-  purple:   '#b060ff',
-  purpleDim:'rgba(176,96,255,0.12)',
-  yellow:   '#ffd040',
-  textHi:   '#e8f0fa',
-  textMid:  '#7a9abf',
-  textLo:   '#3a5575',
+  bg:       '#080c11',
+  grid:     '#111a28',
+  gridMaj:  '#1a2a40',
+  cyan:     '#3a8fd4',
+  cyanDim:  'rgba(58,143,212,0.10)',
+  orange:   '#c86428',
+  orangeDim:'rgba(200,100,40,0.12)',
+  green:    '#2d9e5f',
+  greenDim: 'rgba(45,158,95,0.12)',
+  purple:   '#6b4db0',
+  purpleDim:'rgba(107,77,176,0.10)',
+  yellow:   '#b89030',
+  textHi:   '#c4d4e4',
+  textMid:  '#5a7898',
+  textLo:   '#2e4560',
 };
 
 /* ─── utilities ─────────────────────────────────────────────────────────── */
@@ -938,6 +937,75 @@ class Renderer {
   gx(x) { return this.ox + x * this.cell; }
   gy(y) { return this.oy + y * this.cell; }
 
+  _quad(ctx, cx, cy, heading, alive, cell) {
+    // Quadcopter icon: 4 diagonal arms + rotor disc at each tip + body
+    const arm  = Math.max(2, cell * 0.52);
+    const rot  = Math.max(1, cell * 0.17);   // rotor radius
+    const body = Math.max(1, cell * 0.13);
+    const col  = alive ? C.cyan : C.orange;
+    const rgb  = hexToRgb(col);
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // 4 arms at 45°, 135°, 225°, 315°
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 1.2;
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos(a) * arm, Math.sin(a) * arm);
+      ctx.stroke();
+    }
+
+    // Rotor discs (circle at each arm tip)
+    ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.55)`;
+    ctx.lineWidth   = 0.9;
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a)*arm, Math.sin(a)*arm, Math.max(0.5, rot), 0, 2*Math.PI);
+      ctx.stroke();
+    }
+
+    // Spinning rotor line (visual cue of rotation)
+    const spin = (Date.now() / 120) % (2 * Math.PI);
+    ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.3)`;
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2;
+      const tx = Math.cos(a)*arm, ty = Math.sin(a)*arm;
+      ctx.beginPath();
+      ctx.moveTo(tx + Math.cos(spin)*rot*0.85, ty + Math.sin(spin)*rot*0.85);
+      ctx.lineTo(tx - Math.cos(spin)*rot*0.85, ty - Math.sin(spin)*rot*0.85);
+      ctx.stroke();
+    }
+
+    // Body (small filled square rotated 45°)
+    ctx.fillStyle   = col;
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 0.8;
+    ctx.beginPath();
+    ctx.rect(-body, -body, body*2, body*2);
+    ctx.fill();
+
+    // Heading tick (tiny line showing forward direction)
+    ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.8)`;
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(heading)*arm*0.65, Math.sin(heading)*arm*0.65);
+    ctx.stroke();
+
+    // ID label below drone
+    ctx.fillStyle     = `rgba(${rgb.r},${rgb.g},${rgb.b},0.75)`;
+    ctx.font          = `500 ${Math.max(8, cell*0.42)}px JetBrains Mono, monospace`;
+    ctx.textAlign     = 'center';
+    ctx.textBaseline  = 'top';
+    ctx.fillText('D' + (alive === false ? '!' : (alive && alive.id) || ''), 0, body + 2);
+    ctx.restore();
+  }
+
   draw(sim, hwState) {
     const { ctx, W, H, cell } = this;
     ctx.clearRect(0, 0, W, H);
@@ -946,14 +1014,14 @@ class Renderer {
 
     const state = hwState || sim;
 
-    // ── coverage ──────────────────────────────────────────────
+    // ── coverage heatmap (subtle) ──────────────────────────────
     ctx.save();
     for (let gy = 0; gy < GRID; gy++) {
       for (let gx = 0; gx < GRID; gx++) {
         const v = state.coverage[gy][gx];
         if (v > 0) {
-          ctx.fillStyle = `rgba(0,180,255,${v * 0.13})`;
-          ctx.fillRect(this.gx(gx), this.gy(gy), cell, cell);
+          ctx.fillStyle = `rgba(58,143,212,${v * 0.07})`;
+          ctx.fillRect(this.gx(gx), this.gy(gy), cell + 0.5, cell + 0.5);
         }
       }
     }
@@ -961,102 +1029,120 @@ class Renderer {
 
     // ── grid lines ────────────────────────────────────────────
     ctx.save();
-    ctx.strokeStyle = 'rgba(0,40,80,0.5)';
-    ctx.lineWidth   = 0.5;
     for (let i = 0; i <= GRID; i++) {
+      const major = i % 8 === 0;
+      ctx.strokeStyle = major ? 'rgba(50,80,120,0.45)' : 'rgba(25,45,70,0.5)';
+      ctx.lineWidth   = major ? 0.8 : 0.4;
       ctx.beginPath(); ctx.moveTo(this.gx(i), this.gy(0)); ctx.lineTo(this.gx(i), this.gy(GRID)); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(this.gx(0), this.gy(i)); ctx.lineTo(this.gx(GRID), this.gy(i)); ctx.stroke();
     }
     ctx.restore();
 
+    // ── grid coordinate labels along edges ───────────────────
+    ctx.save();
+    ctx.fillStyle = 'rgba(50,80,110,0.6)';
+    ctx.font      = `${Math.max(7, cell*0.38)}px JetBrains Mono, monospace`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let i = 0; i <= GRID; i += 8) {
+      ctx.fillText(i, this.gx(i), this.gy(0) - 7);
+      ctx.fillText(i, this.gx(0) - 7, this.gy(i));
+    }
+    ctx.restore();
+
     // ── base marker ───────────────────────────────────────────
     ctx.save();
-    ctx.strokeStyle = 'rgba(0,212,255,0.3)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3,3]);
+    ctx.strokeStyle = 'rgba(58,143,212,0.25)';
+    ctx.lineWidth   = 0.8;
+    ctx.setLineDash([3,4]);
     const bx = this.gx(BASE[0]), by = this.gy(BASE[1]);
-    ctx.strokeRect(bx - cell*1.5, by - cell*1.5, cell*3, cell*3);
+    ctx.strokeRect(bx - cell*1.4, by - cell*1.4, cell*2.8, cell*2.8);
     ctx.setLineDash([]);
-    ctx.font = `bold ${cell*0.65}px ${C.fn}, sans-serif`;
-    ctx.fillStyle = 'rgba(0,212,255,0.35)';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle  = 'rgba(58,143,212,0.22)';
+    ctx.font       = `500 ${Math.max(7, cell*0.5)}px Rajdhani, sans-serif`;
+    ctx.textAlign  = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('BASE', bx, by);
     ctx.restore();
 
-    // ── RF rings ──────────────────────────────────────────────
+    // ── RF signal rings (subtle, fast-fading) ────────────────
     ctx.save();
     for (const r of state.rfRings) {
+      const rgb = hexToRgb(r.color);
       ctx.beginPath();
-      ctx.arc(this.gx(r.x), this.gy(r.y), Math.max(0.001, r.r * cell), 0, 2*Math.PI);
-      ctx.strokeStyle = r.color.replace(')',`,${r.alpha})`).replace('rgb','rgba').replace('#','rgba(0,0,0,').replace('rgba(0,0,0,','').replace('##',r.color);
-      // easier:
-      const hex = r.color;
-      const rgb = hexToRgb(hex);
-      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${r.alpha})`;
-      ctx.lineWidth = 1.5;
+      ctx.arc(this.gx(r.x), this.gy(r.y), Math.max(0.5, r.r * cell), 0, 2*Math.PI);
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${r.alpha * 0.55})`;
+      ctx.lineWidth   = 0.8;
       ctx.stroke();
     }
     ctx.restore();
 
-    // ── det flashes ───────────────────────────────────────────
+    // ── detection sweep flash ──────────────────────────────────
     ctx.save();
     for (const f of state.detFlashes) {
-      const a = 1 - f.age;
+      const a = (1 - f.age) * 0.35;
       ctx.beginPath();
-      ctx.arc(this.gx(f.x), this.gy(f.y), Math.max(0.001, (f.age * 2 + 0.3) * cell), 0, 2*Math.PI);
-      ctx.strokeStyle = `rgba(0,212,255,${a*0.6})`;
-      ctx.lineWidth = 1;
+      ctx.arc(this.gx(f.x), this.gy(f.y), Math.max(0.5, (f.age * 1.5 + 0.2) * cell), 0, 2*Math.PI);
+      ctx.strokeStyle = `rgba(58,143,212,${a})`;
+      ctx.lineWidth   = 0.7;
       ctx.stroke();
     }
     ctx.restore();
 
-    // ── hidden phone ──────────────────────────────────────────
+    // ── hidden phone (RF localization source) ─────────────────
     if (state.phoneLive && state.phone) {
       const px = this.gx(state.phone[0]), py = this.gy(state.phone[1]);
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
       ctx.save();
+      // small diamond
+      const s = Math.max(2, cell * 0.28);
+      ctx.strokeStyle = 'rgba(107,77,176,0.6)';
+      ctx.lineWidth   = 0.8;
       ctx.beginPath();
-      ctx.arc(px, py, Math.max(0.001, cell * (0.4 + pulse * 0.2)), 0, 2*Math.PI);
-      ctx.fillStyle = `rgba(176,96,255,${0.15 + pulse*0.1})`;
-      ctx.fill();
-      ctx.strokeStyle = `rgba(176,96,255,${0.4 + pulse*0.3})`;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      ctx.moveTo(px, py - s); ctx.lineTo(px + s, py);
+      ctx.lineTo(px, py + s); ctx.lineTo(px - s, py);
+      ctx.closePath(); ctx.stroke();
+      ctx.font      = `${Math.max(7, cell*0.36)}px JetBrains Mono, monospace`;
+      ctx.fillStyle = 'rgba(107,77,176,0.5)';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText('RF', px, py + s + 2);
       ctx.restore();
     }
 
-    // ── victims (ground truth, shown as dim heat sig) ─────────
+    // ── victim RF signatures (unconfirmed) ───────────────────
     for (const v of (state.victims || [])) {
-      // Only draw if not yet confirmed
       const alreadyConf = (state.confirmed||[]).some(c=>dist(c.x,c.y,v.x,v.y)<2);
       if (alreadyConf) continue;
       const px = this.gx(v.x), py = this.gy(v.y);
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 600 + v.x);
       ctx.save();
-      const grad = ctx.createRadialGradient(px,py,0,px,py,cell*(0.8+pulse*0.3));
-      if (v.kind==='victim') {
-        grad.addColorStop(0, `rgba(255,112,64,${0.3+pulse*0.2})`);
-        grad.addColorStop(1, 'rgba(255,112,64,0)');
-      } else {
-        grad.addColorStop(0, `rgba(0,212,255,${0.15+pulse*0.1})`);
-        grad.addColorStop(1, 'rgba(0,212,255,0)');
+      // small concentric circles — like a radar contact
+      for (let ri = 1; ri <= 2; ri++) {
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.5, cell * ri * 0.28), 0, 2*Math.PI);
+        ctx.strokeStyle = v.kind==='victim'
+          ? `rgba(200,100,40,${0.4 / ri})`
+          : `rgba(58,143,212,${0.3 / ri})`;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
       }
-      ctx.fillStyle = grad;
+      // centre dot
+      ctx.fillStyle = v.kind==='victim' ? 'rgba(200,100,40,0.7)' : 'rgba(58,143,212,0.5)';
       ctx.beginPath();
-      ctx.arc(px, py, Math.max(0.001, cell * (1.2 + pulse*0.3)), 0, 2*Math.PI);
+      ctx.arc(px, py, Math.max(0.5, cell*0.12), 0, 2*Math.PI);
       ctx.fill();
       ctx.restore();
     }
 
-    // ── dismissed ─────────────────────────────────────────────
+    // ── dismissed (false positive) ────────────────────────────
     for (const c of (state.dismissed||[])) {
       const cx = this.gx(c.x), cy = this.gy(c.y);
+      const r  = Math.max(1, cell * 0.3);
       ctx.save();
-      ctx.strokeStyle = 'rgba(255,112,64,0.3)';
-      ctx.lineWidth = 1.5;
-      const r = cell * 0.5;
+      ctx.strokeStyle = 'rgba(200,100,40,0.4)';
+      ctx.lineWidth   = 1;
       ctx.beginPath(); ctx.moveTo(cx-r,cy-r); ctx.lineTo(cx+r,cy+r); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx+r,cy-r); ctx.lineTo(cx-r,cy+r); ctx.stroke();
+      ctx.fillStyle   = 'rgba(200,100,40,0.3)';
+      ctx.font        = `${Math.max(7, cell*0.36)}px JetBrains Mono, monospace`;
+      ctx.textAlign   = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText('DECOY', cx, cy + r + 2);
       ctx.restore();
     }
 
@@ -1064,101 +1150,86 @@ class Renderer {
     for (const c of (state.confirmed||[])) {
       if (c.kind !== 'victim') continue;
       const cx = this.gx(c.x), cy = this.gy(c.y);
-      const age = (Date.now() - c.t) / 1000;
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+      const r  = Math.max(1, cell * 0.75);
       ctx.save();
-      // outer glow
-      ctx.shadowColor = C.green; ctx.shadowBlur = 15 + pulse*8;
-      ctx.strokeStyle = `rgba(45,255,170,${0.6+pulse*0.3})`;
-      ctx.lineWidth = 1.5;
-      const r = cell * 0.85;
-      ctx.beginPath(); ctx.arc(cx, cy, Math.max(0.001, r), 0, 2*Math.PI); ctx.stroke();
-      ctx.shadowBlur = 0;
-      // crosshair
-      ctx.strokeStyle = `rgba(45,255,170,0.9)`;
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(cx-r*1.4,cy); ctx.lineTo(cx-r*0.4,cy); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx+r*0.4,cy); ctx.lineTo(cx+r*1.4,cy); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx,cy-r*1.4); ctx.lineTo(cx,cy-r*0.4); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx,cy+r*0.4); ctx.lineTo(cx,cy+r*1.4); ctx.stroke();
+      ctx.strokeStyle = 'rgba(45,158,95,0.85)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(0.5, r), 0, 2*Math.PI); ctx.stroke();
+      // inner dot
+      ctx.fillStyle = 'rgba(45,158,95,0.6)';
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(0.5, cell*0.12), 0, 2*Math.PI); ctx.fill();
+      // crosshair ticks
+      ctx.strokeStyle = 'rgba(45,158,95,0.7)';
+      ctx.lineWidth   = 0.8;
+      ctx.beginPath(); ctx.moveTo(cx-r*1.35,cy); ctx.lineTo(cx-r*0.55,cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+r*0.55,cy); ctx.lineTo(cx+r*1.35,cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx,cy-r*1.35); ctx.lineTo(cx,cy-r*0.55); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx,cy+r*0.55); ctx.lineTo(cx,cy+r*1.35); ctx.stroke();
+      ctx.fillStyle   = 'rgba(45,158,95,0.6)';
+      ctx.font        = `500 ${Math.max(7, cell*0.38)}px Rajdhani, sans-serif`;
+      ctx.textAlign   = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText('SURVIVOR', cx, cy + r + 3);
       ctx.restore();
     }
 
-    // ── RF final estimate ────────────────────────────────────
+    // ── RF localization fix point ─────────────────────────────
     if (state.rfFinal) {
       const rx = this.gx(state.rfFinal[0]), ry = this.gy(state.rfFinal[1]);
+      const r2 = Math.max(1, cell * 0.5);
       ctx.save();
-      ctx.strokeStyle = 'rgba(176,96,255,0.7)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.arc(rx,ry,Math.max(0.001,cell*0.6),0,2*Math.PI); ctx.stroke();
+      ctx.strokeStyle = 'rgba(107,77,176,0.5)';
+      ctx.lineWidth   = 0.7;
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.arc(rx,ry,Math.max(0.5,r2),0,2*Math.PI); ctx.stroke();
       ctx.setLineDash([]);
-      const r2 = cell*0.9;
-      ctx.strokeStyle='rgba(176,96,255,0.5)';
-      ctx.beginPath(); ctx.moveTo(rx-r2,ry); ctx.lineTo(rx+r2,ry); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(rx,ry-r2); ctx.lineTo(rx,ry+r2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(107,77,176,0.4)';
+      ctx.beginPath(); ctx.moveTo(rx-r2*1.3,ry); ctx.lineTo(rx+r2*1.3,ry); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rx,ry-r2*1.3); ctx.lineTo(rx,ry+r2*1.3); ctx.stroke();
       ctx.restore();
     }
 
-    // ── drone trails ──────────────────────────────────────────
+    // ── drone trails (short, thin) ────────────────────────────
     for (const d of (state.drones||[])) {
       if (!d.trail || d.trail.length < 2) continue;
       ctx.save();
-      for (let i = 1; i < d.trail.length; i++) {
-        const a  = i / d.trail.length;
+      const rgb = hexToRgb(C.cyan);
+      const keep = Math.min(d.trail.length, 18);
+      const start = d.trail.length - keep;
+      for (let i = start + 1; i < d.trail.length; i++) {
+        const a   = (i - start) / keep;
         const [x1,y1] = d.trail[i-1];
         const [x2,y2] = d.trail[i];
         ctx.beginPath();
         ctx.moveTo(this.gx(x1), this.gy(y1));
         ctx.lineTo(this.gx(x2), this.gy(y2));
-        ctx.strokeStyle = `rgba(0,212,255,${a*0.4})`;
-        ctx.lineWidth   = a * 2;
+        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${a * 0.25})`;
+        ctx.lineWidth   = a;
         ctx.stroke();
       }
       ctx.restore();
     }
 
-    // ── drones ────────────────────────────────────────────────
+    // ── drones (quadcopter icons) ─────────────────────────────
     for (const d of (state.drones||[])) {
       const alive = hwState ? d.alive : true;
-      const dx = this.gx(d.x), dy = this.gy(d.y);
-      const r  = cell * 0.45;
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300 + d.id);
-
+      const dx    = this.gx(d.x), dy = this.gy(d.y);
+      this._quad(ctx, dx, dy, d.heading||0, alive, cell);
+      // Drone ID label
       ctx.save();
-      // glow
-      ctx.shadowColor = C.cyan; ctx.shadowBlur = 8 + pulse * 6;
-      ctx.fillStyle   = alive ? `rgba(0,212,255,${0.15+pulse*0.1})` : 'rgba(255,112,64,0.1)';
-      ctx.beginPath(); ctx.arc(dx, dy, Math.max(0.001, r * 1.8), 0, 2*Math.PI); ctx.fill();
-      ctx.shadowBlur  = 0;
-
-      // body
-      ctx.strokeStyle = alive ? C.cyan : C.orange;
-      ctx.lineWidth   = 1.5;
-      ctx.fillStyle   = alive ? 'rgba(0,212,255,0.25)' : 'rgba(255,112,64,0.15)';
-      ctx.beginPath(); ctx.arc(dx, dy, Math.max(0.001, r), 0, 2*Math.PI);
-      ctx.fill(); ctx.stroke();
-
-      // heading arrow
-      const hx = dx + Math.cos(d.heading||0) * r * 1.5;
-      const hy = dy + Math.sin(d.heading||0) * r * 1.5;
-      ctx.strokeStyle = alive ? 'rgba(0,212,255,0.7)' : 'rgba(255,112,64,0.5)';
-      ctx.lineWidth   = 1;
-      ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(hx, hy); ctx.stroke();
-
-      // label
-      ctx.fillStyle   = alive ? C.textHi : C.orange;
-      ctx.font        = `bold ${cell*0.55}px JetBrains Mono, monospace`;
-      ctx.textAlign   = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(d.id || '?', dx, dy);
+      ctx.fillStyle    = alive ? 'rgba(58,143,212,0.75)' : 'rgba(200,100,40,0.7)';
+      ctx.font         = `700 ${Math.max(7, cell*0.44)}px JetBrains Mono, monospace`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`D${d.id||'?'}`, dx, dy + cell * 0.55);
       ctx.restore();
 
-      // goal line
+      // goal line (dotted, very dim)
       if (d.goal && d.state === 0) {
+        const rgb = hexToRgb(C.cyan);
         ctx.save();
-        ctx.strokeStyle = 'rgba(0,212,255,0.1)';
+        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.08)`;
         ctx.lineWidth   = 0.5;
-        ctx.setLineDash([3,5]);
+        ctx.setLineDash([2,5]);
         ctx.beginPath();
         ctx.moveTo(dx, dy);
         ctx.lineTo(this.gx(d.goal[0]), this.gy(d.goal[1]));
