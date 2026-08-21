@@ -824,13 +824,24 @@ class Sim {
         const conf = rssiToConf(bestRssi);
         const lo   = logit(conf);
         if (!bestVic.logOdds[d.id]) bestVic.logOdds[d.id] = 0;
-        bestVic.logOdds[d.id] += lo * dt;
+        // Each drone's per-victim contribution is CAPPED — mirrors the firmware
+        // bearing-diversity rule: a single drone loitering can't talk itself
+        // into a confirm, so a second drone (reobserve) is genuinely required.
+        // Cap = logit(0.72) ≈ 0.94, so one drone maxes out at belief 0.72;
+        // the CONFIRM gate (0.80) needs at least two drones contributing.
+        const CAP_PER_DRONE = 0.94;
+        // Symmetric clamp: one drone can neither confirm alone (+cap) nor
+        // veto everyone else's evidence (-cap). Two independent looks are
+        // always required to cross a decision boundary.
+        const nextLo = bestVic.logOdds[d.id] + lo * dt * 0.6;
+        bestVic.logOdds[d.id] = Math.max(-CAP_PER_DRONE, Math.min(CAP_PER_DRONE, nextLo));
 
-        const totalLo = Object.values(bestVic.logOdds).reduce((a,b)=>a+b,0);
-        const belief  = sigmoid(totalLo);
+        const contribs = Object.values(bestVic.logOdds);
+        const totalLo  = contribs.reduce((a,b)=>a+b,0);
+        const nDrones  = contribs.filter(v => v > 0.1).length;
+        const belief   = sigmoid(totalLo);
 
         if (bestRssi > RSSI_GATE + 15) {
-          // Rate-limit: one ring per victim per 0.7s to avoid spiral overload
           if (!bestVic._lastRing || (now - bestVic._lastRing) > 700) {
             bestVic._lastRing = now;
             this.rfRings.push({ x: bestVic.x, y: bestVic.y,
@@ -842,10 +853,12 @@ class Sim {
           }
         }
 
-        if (belief >= CONF_CONFIRM && !this.confirmed.some(c=>dist(c.x,c.y,bestVic.x,bestVic.y)<3)) {
+        // Confirm requires belief AND at least two independent observers.
+        if (belief >= CONF_CONFIRM && nDrones >= 2
+            && !this.confirmed.some(c=>dist(c.x,c.y,bestVic.x,bestVic.y)<3)) {
           this.confirmed.push({ x: bestVic.x, y: bestVic.y, kind: bestVic.kind, t: now });
           if (bestVic.kind === 'victim') {
-            this._log(`CONFIRMED survivor at (${bestVic.x.toFixed(1)},${bestVic.y.toFixed(1)})`, 'confirm');
+            this._log(`CONFIRMED survivor at (${bestVic.x.toFixed(1)},${bestVic.y.toFixed(1)}) — ${nDrones} independent observers`, 'confirm');
             this.rfRings.push({ x: bestVic.x, y: bestVic.y, r: 0, maxR: 4, alpha: 1, color: C.green, speed: 2.5 });
           } else {
             this._log(`DISMISSED false positive (decoy) at (${bestVic.x.toFixed(1)},${bestVic.y.toFixed(1)})`, 'dismiss');
@@ -873,6 +886,31 @@ class Sim {
       }
     }
 
+    // ── NO-OVERLAP: soft separation force between drones ──────────────────
+    // Frontiers are already spread by EXCL_R, but two drones can still cross
+    // in transit. Only kicks in when they're actually about to collide
+    // (< SEP_R cells); gain kept low so it nudges but never overpowers the
+    // forward motion toward their own goals.
+    const SEP_R = 3.0;   // separation trigger radius
+    for (let i = 0; i < this.drones.length; i++) {
+      for (let j = i + 1; j < this.drones.length; j++) {
+        const a = this.drones[i], b = this.drones[j];
+        if (!a.alive || !b.alive) continue;
+        if (a.state === 1 || b.state === 1) continue;   // let a reobserver approach
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d  = Math.hypot(dx, dy);
+        if (d >= SEP_R) continue;
+        const strength = (d < 0.05) ? 1 : (SEP_R - d) / SEP_R;
+        const push = strength * SPEED * dt * 0.35;
+        const ux   = d < 0.05 ? (Math.random() - 0.5) : dx / d;
+        const uy   = d < 0.05 ? (Math.random() - 0.5) : dy / d;
+        a.x = Math.max(0, Math.min(GRID - 0.01, a.x + ux * push));
+        a.y = Math.max(0, Math.min(GRID - 0.01, a.y + uy * push));
+        b.x = Math.max(0, Math.min(GRID - 0.01, b.x - ux * push));
+        b.y = Math.max(0, Math.min(GRID - 0.01, b.y - uy * push));
+      }
+    }
+
     // ── REOBSERVATION: nearest free drone converges on an uncertain sighting ──
     // Mirrors the firmware auction (bidFor/runAuction in main.cpp): a single
     // RF look sets confidence between the LO/HI gates, so the board that saw
@@ -889,7 +927,11 @@ class Sim {
 
       if (resolved) { v.task = null; continue; }
 
-      const uncertain = belief > 0.35 && belief < CONF_CONFIRM;
+      // Once ANY drone hears the victim strongly enough (belief > 0.30) the
+      // owner announces a REOBSERVE task — regardless of whether it has more
+      // to contribute itself, because it now needs a second drone's angle to
+      // pass the CONFIRM gate.
+      const uncertain = belief > 0.30 && nLooks < 2;
 
       if (uncertain && !v.task) {
         const ownerId = Number(Object.keys(v.logOdds)[0]);
@@ -1118,24 +1160,24 @@ class Renderer {
     ctx.fillText('BASE', bx, by);
     ctx.restore();
 
-    // ── ESP-NOW mesh links (subtle dotted lines between live boards) ──
-    // Real peer-to-peer connectivity: every board broadcasts a 5Hz heartbeat
-    // over ESP-NOW and every other board hears it (that's the mesh, not wifi
-    // infra). This draws a link whenever both ends are alive and in range —
-    // it's the same condition the firmware uses to keep a peer "UP".
+    // ── ESP-NOW mesh links between drones (peer-to-peer radio, ~5 Hz beacon) ──
+    // Every board broadcasts a heartbeat over ESP-NOW; every other board that
+    // hears it counts that peer as alive. RSSI on that heartbeat is what the
+    // firmware uses to decide mesh health. Dashed cyan lines are drawn between
+    // every pair of live drones — thicker/brighter when they are close.
     {
       const dr = (state.drones || []);
       const live = dr.filter(d => (hwState ? d.alive : true));
       ctx.save();
-      ctx.setLineDash([1, 4]);
       for (let i = 0; i < live.length; i++) {
         for (let j = i + 1; j < live.length; j++) {
           const a = live[i], b = live[j];
           const d = dist(a.x, a.y, b.x, b.y);
           if (d > MESH_RANGE) continue;
-          const fade = Math.max(0.05, 1 - d / MESH_RANGE);
-          ctx.strokeStyle = `rgba(58,143,212,${0.16 * fade})`;
-          ctx.lineWidth   = 0.6;
+          const near = Math.max(0.25, 1 - d / MESH_RANGE);   // 1 close → 0.25 far
+          ctx.strokeStyle = `rgba(74,168,232,${0.32 * near + 0.10})`;
+          ctx.lineWidth   = 0.6 + 0.7 * near;
+          ctx.setLineDash([4, 5]);
           ctx.beginPath();
           ctx.moveTo(this.gx(a.x), this.gy(a.y));
           ctx.lineTo(this.gx(b.x), this.gy(b.y));
@@ -1189,26 +1231,33 @@ class Renderer {
       ctx.restore();
     }
 
-    // ── victim RF signatures (unconfirmed) ───────────────────
+    // ── victim RF signatures (unconfirmed) — a very faint ambient trace ──
+    // Real victims broadcast their MAC constantly, but at a whisper: they only
+    // become visible on the dashboard as more drones' log-odds evidence
+    // accumulates. Before any drone has heard the signal, the mark is barely
+    // there; as belief rises it gets progressively easier to see.
+    const drones = state.drones || [];
     for (const v of (state.victims || [])) {
       const alreadyConf = (state.confirmed||[]).some(c=>dist(c.x,c.y,v.x,v.y)<2);
       if (alreadyConf) continue;
       const px = this.gx(v.x), py = this.gy(v.y);
+      // Emphasis grows with the closest drone's RSSI — if no one is near, the
+      // signal is nearly invisible.
+      let closest = 1e9;
+      for (const d of drones) closest = Math.min(closest, dist(d.x, d.y, v.x, v.y));
+      const heard = Math.max(0, Math.min(1, (SENSOR_R * 2 - closest) / (SENSOR_R * 2)));
+      const baseA = 0.10 + 0.55 * heard;   // 0.10 quiet → 0.65 heard
       ctx.save();
-      // small concentric circles — like a radar contact
-      for (let ri = 1; ri <= 2; ri++) {
-        ctx.beginPath();
-        ctx.arc(px, py, Math.max(0.5, cell * ri * 0.28), 0, 2*Math.PI);
-        ctx.strokeStyle = v.kind==='victim'
-          ? `rgba(200,100,40,${0.4 / ri})`
-          : `rgba(58,143,212,${0.3 / ri})`;
-        ctx.lineWidth = 0.8;
-        ctx.stroke();
-      }
-      // centre dot
-      ctx.fillStyle = v.kind==='victim' ? 'rgba(200,100,40,0.7)' : 'rgba(58,143,212,0.5)';
+      // single faint contact circle — no concentric radar rings
       ctx.beginPath();
-      ctx.arc(px, py, Math.max(0.5, cell*0.12), 0, 2*Math.PI);
+      ctx.arc(px, py, Math.max(0.5, cell * 0.32), 0, 2*Math.PI);
+      ctx.strokeStyle = `rgba(200,100,40,${baseA * 0.7})`;
+      ctx.lineWidth   = 0.7;
+      ctx.stroke();
+      // centre dot — always dim
+      ctx.fillStyle = `rgba(200,100,40,${baseA})`;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(0.5, cell*0.10), 0, 2*Math.PI);
       ctx.fill();
       ctx.restore();
     }
@@ -1306,15 +1355,16 @@ class Renderer {
       ctx.fillText(`D${d.id||'?'}`, dx, dy + cell * 0.55);
       ctx.restore();
 
-      // goal line — dim dotted while SEARCHing, brighter amber while
-      // REOBSERVEing (a second drone diverting to confirm a sighting)
-      if (d.goal && (d.state === 0 || d.state === 1)) {
-        const reobs = d.state === 1;
-        const rgb = hexToRgb(reobs ? C.yellow : C.cyan);
+      // Amber vector only when this drone is REOBSERVING — it visually
+      // shows the diverted drone converging on the uncertain sighting.
+      // SEARCH goals are intentionally NOT drawn — the frontier changes so
+      // often that showing them clutters the map and reads as mesh traffic.
+      if (d.goal && d.state === 1) {
+        const rgb = hexToRgb(C.yellow);
         ctx.save();
-        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${reobs ? 0.5 : 0.08})`;
-        ctx.lineWidth   = reobs ? 0.9 : 0.5;
-        ctx.setLineDash(reobs ? [3,3] : [2,5]);
+        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.55)`;
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([3,3]);
         ctx.beginPath();
         ctx.moveTo(dx, dy);
         ctx.lineTo(this.gx(d.goal[0]), this.gy(d.goal[1]));
